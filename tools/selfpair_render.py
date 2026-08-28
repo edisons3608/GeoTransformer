@@ -163,7 +163,8 @@ def main():
         bar.outline.set_visible(False)
         bar.ax.tick_params(labelsize=7.5, color=INK_2)
 
-        name = osp.basename(files[mesh_id])[:6]
+        stem = osp.splitext(osp.basename(files[mesh_id]))[0]
+        name = stem if len(stem) <= 24 else stem[:6]  # long scan filenames collapse to their specimen id
         fig.suptitle('{}  trial {}  --  RRE {:.2f} deg, RTE {:.3f} mm, mean residual {:.3f} mm'.format(
             name, trial, rre, rte * mm, residual_mm.mean()), x=0.02, ha='left', fontsize=11, fontweight='bold')
         fig.text(0.02, 0.90, '6-DoF residual  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   '
