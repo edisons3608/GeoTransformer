@@ -1,0 +1,960 @@
+<title>Talus Self-Pair Registration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  color-scheme: light;
+  --paper: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --ink: #141a21;
+  --ink-2: #515c6a;
+  --ink-3: #7d8794;
+  --line: #dde2e9;
+  --line-strong: #c3cbd6;
+  --ref: #2a78d6;
+  --src: #eb6834;
+  --ref-soft: #2a78d622;
+  --src-soft: #eb683422;
+  --good: #12855f;
+  --shadow: 0 1px 2px rgba(20, 26, 33, .06), 0 8px 24px rgba(20, 26, 33, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #10151a;
+    --surface: #171d25;
+    --surface-2: #1e252e;
+    --ink: #eef2f7;
+    --ink-2: #a9b4c0;
+    --ink-3: #79838f;
+    --line: #262e38;
+    --line-strong: #3a444f;
+    --ref: #4c93e8;
+    --src: #f07c4b;
+    --ref-soft: #4c93e82e;
+    --src-soft: #f07c4b2e;
+    --good: #34b98a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #10151a;
+  --surface: #171d25;
+  --surface-2: #1e252e;
+  --ink: #eef2f7;
+  --ink-2: #a9b4c0;
+  --ink-3: #79838f;
+  --line: #262e38;
+  --line-strong: #3a444f;
+  --ref: #4c93e8;
+  --src: #f07c4b;
+  --ref-soft: #4c93e82e;
+  --src-soft: #f07c4b2e;
+  --good: #34b98a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 56px 24px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+h1 {
+  font-family: Archivo, "IBM Plex Sans", sans-serif;
+  font-weight: 700;
+  font-size: clamp(30px, 4.6vw, 46px);
+  letter-spacing: -.025em;
+  line-height: 1.05;
+  text-wrap: balance;
+  margin: 12px 0 0;
+}
+h2 {
+  font-family: Archivo, "IBM Plex Sans", sans-serif;
+  font-weight: 600;
+  font-size: 21px;
+  letter-spacing: -.015em;
+  margin: 0;
+  text-wrap: balance;
+}
+.lede { max-width: 68ch; color: var(--ink-2); margin: 14px 0 0; font-size: 16.5px; }
+.note { color: var(--ink-2); font-size: 13.5px; margin: 0; max-width: 78ch; }
+
+section { display: flex; flex-direction: column; gap: 18px; }
+.sec-head { display: flex; flex-direction: column; gap: 6px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tile .val {
+  font-family: Archivo, sans-serif;
+  font-weight: 600;
+  font-size: 30px;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tile .val small { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.tile .cap { font-size: 12.5px; color: var(--ink-2); }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.panel-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.panel-body { padding: 16px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+button {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 5px 13px;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+button:hover { color: var(--ink); border-color: var(--ink-3); }
+button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--ref); outline-offset: 2px; }
+
+.ctl { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-2); }
+.ctl label { white-space: nowrap; }
+input[type="range"] { accent-color: var(--ref); width: 148px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-2); }
+.legend .item { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.legend .item[data-off="1"] { opacity: .38; }
+.swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.swatch.hollow { background: none; border: 2px solid currentColor; }
+
+#stage { position: relative; background: var(--surface); }
+#view { display: block; width: 100%; height: 460px; touch-action: none; cursor: grab; }
+#view.dragging { cursor: grabbing; }
+.stage-readout {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  line-height: 1.75;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.stage-readout b { color: var(--ink); font-weight: 500; }
+.stage-hint {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.chart { width: 100%; display: block; overflow: visible; }
+.chart text { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; fill: var(--ink-3); }
+.chart text.lbl { font-family: "IBM Plex Sans", sans-serif; font-size: 11.5px; fill: var(--ink-2); }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { stroke: var(--line-strong); stroke-width: 1; }
+.chart .dot { cursor: crosshair; }
+.chart .hit { fill: transparent; cursor: crosshair; }
+
+#tip {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -100%);
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre;
+  transition: opacity .1s ease;
+  font-variant-numeric: tabular-nums;
+}
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 11.5px; color: var(--ink-3); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
+th:first-child, td:first-child { text-align: left; font-family: "IBM Plex Mono", monospace; }
+tbody tr:last-child td { border-bottom: none; }
+td.num { font-family: "IBM Plex Mono", monospace; }
+.scroll-x { overflow-x: auto; }
+
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+
+dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 8px 20px; margin: 0; font-size: 13.5px; }
+dl.meta dt { color: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+dl.meta dd { margin: 0; color: var(--ink-2); }
+
+code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+pre {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow-x: auto;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+footer { color: var(--ink-3); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 20px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">GeoTransformer &middot; pre-trained weights &middot; 31 talus specimens</p>
+  <h1>Registering a bone against itself</h1>
+  <p class="lede">
+    Each talus mesh is sampled twice, one copy is rotated and translated at random, both copies get
+    Gaussian noise, and GeoTransformer has to put them back together. No RANSAC, no fine-tuning,
+    no ICP refinement &mdash; just the released 3DMatch weights on data they have never seen.
+  </p>
+</header>
+
+<section id="headline">
+  <div class="tiles" id="tiles"></div>
+  <p class="note">
+    Figures are for the 3DMatch weights under full random SO(3) rotation &mdash; the hardest configuration tested.
+    Recall counts a pair as registered when rotation error is under 5&deg; and translation error under 2&nbsp;mm.
+  </p>
+</section>
+
+<section id="viewer-section">
+  <div class="sec-head">
+    <h2>The registration, in the round</h2>
+    <p class="note">
+      Drag to orbit, scroll to zoom. The scrubber moves the source cloud from where the random transform
+      put it to where GeoTransformer says it belongs; the residual view colours every point by how far it
+      lands from ground truth.
+    </p>
+  </div>
+  <div class="panel">
+    <div class="panel-bar">
+      <div class="chips" id="case-chips"></div>
+      <div class="ctl">
+        <label for="scrub">Alignment</label>
+        <input type="range" id="scrub" min="0" max="1" step="0.01" value="1">
+      </div>
+      <div class="chips" id="view-chips"></div>
+    </div>
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div class="stage-readout" id="readout"></div>
+      <div class="stage-hint">drag to orbit &middot; scroll to zoom</div>
+    </div>
+  </div>
+</section>
+
+<section id="sixdof-section">
+  <div class="sec-head">
+    <h2>Error in all six degrees of freedom</h2>
+    <p class="note">
+      Signed residuals per axis: rotation is <code>R_est&#7488;&middot;R_gt</code> decomposed into xyz Euler angles,
+      translation is <code>t_gt &minus; t_est</code> in the reference frame. Every dot is one pair &mdash; hover it.
+    </p>
+  </div>
+  <div class="panel">
+    <div class="panel-bar">
+      <div class="chips" id="sixdof-chips"></div>
+      <div class="legend" id="sixdof-legend"></div>
+    </div>
+    <div class="panel-body"><svg class="chart" id="sixdof-chart"></svg></div>
+  </div>
+</section>
+
+<section id="runs-section">
+  <div class="sec-head">
+    <h2>Which weights transfer</h2>
+    <p class="note">
+      Six configurations, 93 pairs each, on a log axis. The ModelNet weights were trained on furniture
+      with rotations capped at 45&deg;; past that cap they stop registering entirely.
+    </p>
+  </div>
+  <div class="panel">
+    <div class="panel-bar">
+      <div class="chips" id="metric-chips"></div>
+      <span class="note" style="font-size:12.5px">box = quartiles &middot; whiskers = 1.5&times;IQR &middot; dots = outliers</span>
+    </div>
+    <div class="panel-body"><svg class="chart" id="runs-chart"></svg></div>
+  </div>
+  <div class="panel">
+    <div class="panel-body scroll-x"><table id="runs-table"></table></div>
+  </div>
+</section>
+
+<section id="scatter-section">
+  <div class="sec-head">
+    <h2>Correspondence quality decides everything</h2>
+    <p class="note">
+      Final rotation error against the inlier ratio of the predicted correspondences. Toggle a series in the
+      legend to isolate it.
+    </p>
+  </div>
+  <div class="panel">
+    <div class="panel-bar"><div class="legend" id="scatter-legend"></div></div>
+    <div class="panel-body"><svg class="chart" id="scatter-chart"></svg></div>
+  </div>
+</section>
+
+<section id="specimen-section">
+  <div class="sec-head">
+    <h2>Is any specimen harder than the rest?</h2>
+    <p class="note">
+      Mean point RMSE per talus across its three trials, with the min&ndash;max range. The spread is narrow:
+      accuracy is a property of the method here, not of individual bone shapes.
+    </p>
+  </div>
+  <div class="panel">
+    <div class="panel-bar">
+      <div class="chips" id="sort-chips"></div>
+      <div class="legend" id="specimen-legend"></div>
+    </div>
+    <div class="panel-body"><svg class="chart" id="specimen-chart"></svg></div>
+  </div>
+</section>
+
+<section id="method">
+  <div class="sec-head">
+    <h2>How the pairs were made</h2>
+  </div>
+  <div class="grid-2">
+    <div class="panel"><div class="panel-body">
+      <dl class="meta">
+        <dt>sampling</dt><dd>Two independent area-weighted surface samplings per mesh, so no point has a twin in the other cloud</dd>
+        <dt>normalize</dt><dd>Shared unit-sphere frame per specimen; a talus radius is ~30&nbsp;mm</dd>
+        <dt>transform</dt><dd>Random rotation (&le;45&deg; Euler, or uniform SO(3)) and translation up to 0.5 normalized units</dd>
+        <dt>noise</dt><dd>Gaussian &sigma;&nbsp;=&nbsp;0.01 clipped at 0.05, applied to both clouds &mdash; about 0.3&nbsp;mm &sigma;, 1.5&nbsp;mm max</dd>
+        <dt>overlap</dt><dd>Full; no cropping</dd>
+        <dt>points</dt><dd>20&nbsp;000 per cloud for 3DMatch, 1&nbsp;024 for ModelNet, matching each model's training density</dd>
+      </dl>
+    </div></div>
+    <div class="panel"><div class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+      <p class="note" style="margin:0">Reproduce a configuration:</p>
+<pre>python tools/selfpair_eval.py --model 3dmatch \
+    --rotation_mode so3 --rotation_magnitude 180 \
+    --num_trials 3 --tag 3dmatch_so3180
+
+python tools/selfpair_6dof.py     # per-axis tables
+python tools/selfpair_artifact.py # this page</pre>
+      <p class="note" style="margin:0">
+        Runs are seeded, so the same command reproduces the same 93 pairs.
+      </p>
+    </div></div>
+  </div>
+</section>
+
+<footer>
+  GeoTransformer (Qin et al., CVPR 2022) &middot; released 3DMatch and ModelNet weights, no fine-tuning &middot;
+  93 pairs per configuration on an RTX PRO 2000, ~0.2&nbsp;s per pair.
+</footer>
+
+</div>
+
+<div id="tip" role="status"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const tip = document.getElementById('tip');
+
+const fmt = (v, d = 2) => v.toFixed(d);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+function svg(tag, attrs = {}, parent = null) {
+  const node = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+function showTip(evt, text) {
+  tip.textContent = text;
+  tip.style.left = evt.clientX + 'px';
+  tip.style.top = (evt.clientY - 12) + 'px';
+  tip.style.opacity = '1';
+}
+function hideTip() { tip.style.opacity = '0'; }
+
+function hoverable(node, text) {
+  node.addEventListener('pointermove', e => showTip(e, text));
+  node.addEventListener('pointerleave', hideTip);
+}
+
+function chipGroup(host, items, active, onPick) {
+  host.innerHTML = '';
+  const buttons = items.map(item => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = item.label;
+    b.setAttribute('aria-pressed', String(item.id === active));
+    b.addEventListener('click', () => {
+      active = item.id;
+      buttons.forEach((other, i) => other.setAttribute('aria-pressed', String(items[i].id === active)));
+      onPick(item.id);
+    });
+    host.appendChild(b);
+    return b;
+  });
+}
+
+function legendItems(host, items, onToggle) {
+  host.innerHTML = '';
+  items.forEach(item => {
+    const el = document.createElement('span');
+    el.className = 'item';
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('role', 'button');
+    el.dataset.off = '0';
+    el.innerHTML = '<span class="swatch' + (item.hollow ? ' hollow' : '') + '" style="' +
+      (item.hollow ? 'color:' + item.color : 'background:' + item.color) + '"></span>' + item.label;
+    const toggle = () => {
+      el.dataset.off = el.dataset.off === '1' ? '0' : '1';
+      onToggle(item.id, el.dataset.off === '0');
+    };
+    el.addEventListener('click', toggle);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    host.appendChild(el);
+  });
+}
+
+function quartiles(values) {
+  const s = [...values].sort((a, b) => a - b);
+  const q = p => {
+    const i = (s.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i);
+    return s[lo] + (s[hi] - s[lo]) * (i - lo);
+  };
+  const q1 = q(0.25), q3 = q(0.75), iqr = q3 - q1;
+  const loFence = q1 - 1.5 * iqr, hiFence = q3 + 1.5 * iqr;
+  const inside = s.filter(v => v >= loFence && v <= hiFence);
+  return {
+    min: s[0], max: s[s.length - 1], q1, q2: q(0.5), q3,
+    lo: inside.length ? inside[0] : s[0],
+    hi: inside.length ? inside[inside.length - 1] : s[s.length - 1],
+    out: s.filter(v => v < loFence || v > hiFence),
+  };
+}
+
+const runById = Object.fromEntries(DATA.runs.map(r => [r.tag, r]));
+const runLabel = tag => {
+  const r = runById[tag];
+  const weights = r.model === '3dmatch' ? '3DMatch' : 'ModelNet';
+  const rot = r.rotation === 'so3' ? 'SO(3)' : '\u226445\u00b0';
+  const pts = r.model === 'modelnet' ? ', ' + r.num_points + ' pts' : '';
+  return weights + ', ' + rot + pts;
+};
+const runColor = tag => runById[tag].model === '3dmatch' ? css('--ref') : css('--src');
+
+/* ---------------------------------------------------------------- headline */
+function buildTiles() {
+  const run = runById['3dmatch_so3180'] || DATA.runs[0];
+  const s = run.summary;
+  const tiles = [
+    { val: fmt(s.rre_deg.median, 2), unit: '\u00b0', cap: 'median rotation error' },
+    { val: fmt(s.rmse_mm.median, 3), unit: 'mm', cap: 'median point RMSE' },
+    { val: fmt(100 * s.recall_5deg_2mm, 0), unit: '%', cap: 'registration recall, 93 pairs' },
+    { val: fmt(s.mean_time_s, 2), unit: 's', cap: 'per pair, 20k points, GPU' },
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(t =>
+    '<div class="tile"><span class="val">' + t.val + '<small>' + t.unit + '</small></span>' +
+    '<span class="cap">' + t.cap + '</span></div>').join('');
+}
+
+/* ------------------------------------------------------------- 3D viewer */
+const viewer = (() => {
+  const canvas = document.getElementById('view');
+  const ctx = canvas.getContext('2d');
+  const readout = document.getElementById('readout');
+  let caseIndex = 0, blend = 1, mode = 'pair';
+  let yaw = 0.6, pitch = -0.28, zoom = 1, idle = true;
+  let dragging = false, lastX = 0, lastY = 0;
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const apply = (T, p) => [
+    T[0][0] * p[0] + T[0][1] * p[1] + T[0][2] * p[2] + T[0][3],
+    T[1][0] * p[0] + T[1][1] * p[1] + T[1][2] * p[2] + T[1][3],
+    T[2][0] * p[0] + T[2][1] * p[1] + T[2][2] * p[2] + T[2][3],
+  ];
+
+  const prepared = DATA.cases.map(c => {
+    const aligned = c.src.map(p => apply(c.est, p));
+    const truth = c.src.map(p => apply(c.gt, p));
+    const residual = aligned.map((p, i) => Math.hypot(p[0] - truth[i][0], p[1] - truth[i][1], p[2] - truth[i][2]));
+    const all = c.ref.concat(c.src, aligned);
+    const center = [0, 1, 2].map(k => all.reduce((a, p) => a + p[k], 0) / all.length);
+    const radius = Math.max(...all.map(p => Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2])));
+    return { ...c, aligned, residual, center, radius, resMax: Math.max(...residual) };
+  });
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function residualColor(t) {
+    // single-hue ramp, light -> saturated, over the reference blue
+    const stops = [[205, 226, 251], [110, 167, 236], [42, 120, 214], [16, 66, 129]];
+    const x = Math.max(0, Math.min(0.999, t)) * (stops.length - 1);
+    const i = Math.floor(x), f = x - i;
+    const a = stops[i], b = stops[i + 1];
+    return 'rgb(' + a.map((v, k) => Math.round(v + (b[k] - v) * f)).join(',') + ')';
+  }
+
+  function draw() {
+    const c = prepared[caseIndex];
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    const scale = (Math.min(w, h) * 0.42 / c.radius) * zoom;
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+
+    const project = p => {
+      const x = p[0] - c.center[0], y = p[1] - c.center[1], z = p[2] - c.center[2];
+      const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
+      const y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+      return [w / 2 + x1 * scale, h / 2 - y1 * scale, z2];
+    };
+
+    const marks = [];
+    for (let i = 0; i < c.ref.length; i++) {
+      const p = project(c.ref[i]);
+      marks.push([p[0], p[1], p[2], css('--ref'), 0.55]);
+    }
+    for (let i = 0; i < c.src.length; i++) {
+      const s = c.src[i], a = c.aligned[i];
+      const p = project([s[0] + (a[0] - s[0]) * blend, s[1] + (a[1] - s[1]) * blend, s[2] + (a[2] - s[2]) * blend]);
+      const color = mode === 'residual' ? residualColor(c.residual[i] / c.resMax) : css('--src');
+      marks.push([p[0], p[1], p[2], color, mode === 'residual' ? 0.95 : 0.55]);
+    }
+    if (mode === 'residual') marks.splice(0, c.ref.length);
+    marks.sort((a, b) => a[2] - b[2]);
+    for (const m of marks) {
+      ctx.globalAlpha = m[4];
+      ctx.fillStyle = m[3];
+      ctx.fillRect(m[0], m[1], 1.7, 1.7);
+    }
+    ctx.globalAlpha = 1;
+
+    const rot = c.rot_err, tr = c.trans_err;
+    readout.innerHTML =
+      '<b>' + c.specimen + '</b> &middot; trial ' + c.trial + ' &middot; ' +
+      (c.rotation === 'so3' ? 'random SO(3)' : 'rotation \u2264 45\u00b0') + '<br>' +
+      'RRE <b>' + fmt(c.rre, 2) + '\u00b0</b> &nbsp; RTE <b>' + fmt(c.rte, 3) + ' mm</b> &nbsp; ' +
+      'inliers <b>' + fmt(100 * c.ir, 0) + '%</b><br>' +
+      'r <b>' + rot.map(v => (v >= 0 ? '+' : '') + fmt(v, 2)).join(' ') + '</b> deg &nbsp; ' +
+      't <b>' + tr.map(v => (v >= 0 ? '+' : '') + fmt(v, 3)).join(' ') + '</b> mm' +
+      (mode === 'residual' ? '<br>residual ramp 0 &rarr; ' + fmt(c.resMax, 3) + ' mm' : '');
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    dragging = true; idle = false; lastX = e.clientX; lastY = e.clientY;
+    canvas.classList.add('dragging');
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    yaw += (e.clientX - lastX) * 0.008;
+    pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - lastY) * 0.006));
+    lastX = e.clientX; lastY = e.clientY;
+    draw();
+  });
+  const endDrag = () => { dragging = false; canvas.classList.remove('dragging'); };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    idle = false;
+    zoom = Math.max(0.5, Math.min(4, zoom * (e.deltaY > 0 ? 0.92 : 1.09)));
+    draw();
+  }, { passive: false });
+
+  document.getElementById('scrub').addEventListener('input', e => {
+    blend = +e.target.value; idle = false; draw();
+  });
+
+  chipGroup(document.getElementById('case-chips'),
+    prepared.map((c, i) => ({ id: i, label: c.label })), 0, id => { caseIndex = id; draw(); });
+  chipGroup(document.getElementById('view-chips'), [
+    { id: 'pair', label: 'Both clouds' },
+    { id: 'residual', label: 'Residual map' },
+  ], 'pair', id => { mode = id; draw(); });
+
+  function spin() {
+    if (idle && !reduceMotion) { yaw += 0.0016; draw(); }
+    requestAnimationFrame(spin);
+  }
+
+  addEventListener('resize', resize);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => draw());
+  resize();
+  requestAnimationFrame(spin);
+  return { redraw: draw };
+})();
+
+/* ----------------------------------------------------------- 6-DoF chart */
+const sixdof = (() => {
+  const svgEl = document.getElementById('sixdof-chart');
+  const tags = DATA.runs.filter(r => r.model === '3dmatch').map(r => r.tag);
+  const shown = new Set(tags);
+  let metric = 'rot';
+
+  function render() {
+    const W = svgEl.clientWidth || 900, H = 360;
+    const pad = { l: 58, r: 18, t: 16, b: 34 };
+    svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svgEl.setAttribute('height', H);
+    svgEl.innerHTML = '';
+    const axes = metric === 'rot' ? ['rx', 'ry', 'rz'] : ['tx', 'ty', 'tz'];
+    const unit = metric === 'rot' ? '\u00b0' : 'mm';
+    const active = tags.filter(t => shown.has(t));
+
+    let lim = 0.001;
+    active.forEach(t => runById[t].records.forEach(r => {
+      (metric === 'rot' ? r.rot : r.trans).forEach(v => { lim = Math.max(lim, Math.abs(v)); });
+    }));
+    lim *= 1.08;
+    const y = v => pad.t + (lim - v) / (2 * lim) * (H - pad.t - pad.b);
+    const bandW = (W - pad.l - pad.r) / 3;
+
+    for (let i = 0; i <= 8; i++) {
+      const v = lim - (2 * lim) * i / 8;
+      svg('line', { class: 'grid', x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v) }, svgEl);
+      svg('text', { x: pad.l - 9, y: y(v) + 3.5, 'text-anchor': 'end' }, svgEl).textContent = v.toFixed(2);
+    }
+    svg('line', { class: 'axis', x1: pad.l, x2: W - pad.r, y1: y(0), y2: y(0), 'stroke-dasharray': '5 4' }, svgEl);
+    svg('text', { class: 'lbl', x: pad.l - 44, y: pad.t + 10, transform: 'rotate(-90 ' + (pad.l - 44) + ' ' + (pad.t + 10) + ')' }, svgEl)
+      .textContent = 'residual (' + unit + ')';
+
+    axes.forEach((axisName, ai) => {
+      const cx = pad.l + bandW * (ai + 0.5);
+      svg('text', { class: 'lbl', x: cx, y: H - 10, 'text-anchor': 'middle' }, svgEl).textContent = axisName;
+      active.forEach((tag, ti) => {
+        const color = ti === 0 ? css('--ref') : css('--src');
+        const offset = (ti - (active.length - 1) / 2) * (bandW * 0.34);
+        const x0 = cx + offset;
+        const records = runById[tag].records;
+        const values = records.map(r => (metric === 'rot' ? r.rot : r.trans)[ai]);
+        const q = quartiles(values);
+
+        const boxW = bandW * 0.22;
+        svg('line', { x1: x0, x2: x0, y1: y(q.hi), y2: y(q.lo), stroke: color, 'stroke-width': 1.4 }, svgEl);
+        const box = svg('rect', {
+          x: x0 - boxW / 2, y: y(q.q3), width: boxW, height: Math.max(1, y(q.q1) - y(q.q3)),
+          fill: color, 'fill-opacity': .16, stroke: color, 'stroke-width': 1.5, rx: 3,
+        }, svgEl);
+        hoverable(box, runLabel(tag) + '\n' + axisName +
+          '  median ' + q.q2.toFixed(3) + unit +
+          '\nIQR ' + q.q1.toFixed(3) + ' \u2026 ' + q.q3.toFixed(3) +
+          '\nrange ' + q.min.toFixed(3) + ' \u2026 ' + q.max.toFixed(3));
+        svg('line', { x1: x0 - boxW / 2, x2: x0 + boxW / 2, y1: y(q.q2), y2: y(q.q2), stroke: color, 'stroke-width': 2.4 }, svgEl);
+
+        records.forEach((r, i) => {
+          const v = (metric === 'rot' ? r.rot : r.trans)[ai];
+          const jitter = ((i * 2654435761) % 1000 / 1000 - 0.5) * boxW * 1.5;
+          const dot = svg('circle', {
+            class: 'dot', cx: x0 + jitter, cy: y(v), r: 2,
+            fill: color, 'fill-opacity': .35,
+          }, svgEl);
+          hoverable(dot, r.file + ' trial ' + r.trial + '\n' + axisName + ' ' +
+            (v >= 0 ? '+' : '') + v.toFixed(3) + unit + '\nRRE ' + r.rre.toFixed(2) + '\u00b0');
+        });
+      });
+    });
+  }
+
+  chipGroup(document.getElementById('sixdof-chips'), [
+    { id: 'rot', label: 'Rotation' }, { id: 'trans', label: 'Translation' },
+  ], 'rot', id => { metric = id; render(); });
+  legendItems(document.getElementById('sixdof-legend'),
+    tags.map((t, i) => ({ id: t, label: runLabel(t), color: i === 0 ? css('--ref') : css('--src') })),
+    (id, on) => { on ? shown.add(id) : shown.delete(id); render(); });
+
+  addEventListener('resize', render);
+  render();
+  return { render };
+})();
+
+/* -------------------------------------------------------- run comparison */
+const runs = (() => {
+  const svgEl = document.getElementById('runs-chart');
+  const metrics = { rre: ['rre', 'rotation error (degrees)'], rmse: ['rmse', 'point RMSE (mm)'], rte: ['rte', 'translation error (mm)'] };
+  let metric = 'rre';
+
+  const ordered = [...DATA.runs].sort((a, b) =>
+    quartiles(b.records.map(r => r.rre)).q2 - quartiles(a.records.map(r => r.rre)).q2);
+
+  function render() {
+    const W = svgEl.clientWidth || 900, rowH = 46, H = ordered.length * rowH + 56;
+    const pad = { l: 168, r: 22, t: 12, b: 40 };
+    svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svgEl.setAttribute('height', H);
+    svgEl.innerHTML = '';
+    const key = metrics[metric][0];
+
+    let lo = Infinity, hi = 0;
+    ordered.forEach(run => run.records.forEach(r => {
+      const v = Math.max(r[key], 1e-3);
+      lo = Math.min(lo, v); hi = Math.max(hi, v);
+    }));
+    const l0 = Math.floor(Math.log10(lo)), l1 = Math.ceil(Math.log10(hi));
+    const x = v => pad.l + (Math.log10(Math.max(v, 1e-3)) - l0) / (l1 - l0) * (W - pad.l - pad.r);
+
+    for (let e = l0; e <= l1; e++) {
+      const gx = x(Math.pow(10, e));
+      svg('line', { class: 'grid', x1: gx, x2: gx, y1: pad.t, y2: H - pad.b + 6 }, svgEl);
+      svg('text', { x: gx, y: H - pad.b + 22, 'text-anchor': 'middle' }, svgEl).textContent =
+        e < 0 ? '0.' + '0'.repeat(-e - 1) + '1' : Math.pow(10, e).toString();
+    }
+    svg('text', { class: 'lbl', x: (pad.l + W - pad.r) / 2, y: H - 8, 'text-anchor': 'middle' }, svgEl)
+      .textContent = metrics[metric][1] + ' \u2014 log scale';
+
+    ordered.forEach((run, i) => {
+      const yc = pad.t + rowH * (i + 0.5);
+      const color = runColor(run.tag);
+      const q = quartiles(run.records.map(r => Math.max(r[key], 1e-3)));
+      svg('text', { class: 'lbl', x: pad.l - 12, y: yc + 4, 'text-anchor': 'end' }, svgEl).textContent = runLabel(run.tag);
+      svg('line', { x1: x(q.lo), x2: x(q.hi), y1: yc, y2: yc, stroke: color, 'stroke-width': 1.4 }, svgEl);
+      const box = svg('rect', {
+        x: x(q.q1), y: yc - 11, width: Math.max(2, x(q.q3) - x(q.q1)), height: 22,
+        fill: color, 'fill-opacity': .16, stroke: color, 'stroke-width': 1.5, rx: 4,
+      }, svgEl);
+      hoverable(box, runLabel(run.tag) + '\nmedian ' + q.q2.toFixed(3) +
+        '\nIQR ' + q.q1.toFixed(3) + ' \u2026 ' + q.q3.toFixed(3) +
+        '\nworst ' + q.max.toFixed(3) + '\n' + run.records.length + ' pairs');
+      svg('line', { x1: x(q.q2), x2: x(q.q2), y1: yc - 11, y2: yc + 11, stroke: color, 'stroke-width': 2.6 }, svgEl);
+      svg('text', { x: x(q.q2), y: yc - 16, 'text-anchor': 'middle', fill: color }, svgEl).textContent = q.q2.toFixed(2);
+      q.out.forEach(v => {
+        const dot = svg('circle', { class: 'dot', cx: x(v), cy: yc, r: 2.6, fill: 'none', stroke: color, 'stroke-width': 1.2 }, svgEl);
+        hoverable(dot, 'outlier ' + v.toFixed(3));
+      });
+    });
+  }
+
+  chipGroup(document.getElementById('metric-chips'),
+    [{ id: 'rre', label: 'Rotation error' }, { id: 'rmse', label: 'Point RMSE' }, { id: 'rte', label: 'Translation error' }],
+    'rre', id => { metric = id; render(); });
+
+  function table() {
+    const head = ['configuration', 'pairs', 'RRE med', 'RRE mean', 'RMSE med', 'RTE med', 'inliers', 'recall 5\u00b0/2mm', 's/pair'];
+    const rows = ordered.slice().reverse().map(run => {
+      const s = run.summary, rec = run.records;
+      const med = key => quartiles(rec.map(r => r[key])).q2;
+      return '<tr><td>' + runLabel(run.tag) + '</td>' +
+        [rec.length, fmt(s.rre_deg.median, 2), fmt(s.rre_deg.mean, 2), fmt(s.rmse_mm.median, 3),
+         fmt(med('rte'), 3), fmt(s.inlier_ratio_mean, 3), fmt(100 * s.recall_5deg_2mm, 1) + '%',
+         fmt(s.mean_time_s, 2)].map(v => '<td class="num">' + v + '</td>').join('') + '</tr>';
+    }).join('');
+    document.getElementById('runs-table').innerHTML =
+      '<thead><tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody>';
+  }
+
+  addEventListener('resize', render);
+  render(); table();
+  return { render };
+})();
+
+/* --------------------------------------------------------------- scatter */
+const scatter = (() => {
+  const svgEl = document.getElementById('scatter-chart');
+  const shown = new Set(DATA.runs.map(r => r.tag));
+
+  function render() {
+    const W = svgEl.clientWidth || 900, H = 420;
+    const pad = { l: 62, r: 20, t: 14, b: 46 };
+    svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svgEl.setAttribute('height', H);
+    svgEl.innerHTML = '';
+    const x = v => pad.l + v * (W - pad.l - pad.r);
+    const y = v => pad.t + (2.4 - Math.log10(Math.max(v, 0.01))) / 4.4 * (H - pad.t - pad.b);
+
+    for (let e = -2; e <= 2; e++) {
+      const gy = y(Math.pow(10, e));
+      svg('line', { class: 'grid', x1: pad.l, x2: W - pad.r, y1: gy, y2: gy }, svgEl);
+      svg('text', { x: pad.l - 9, y: gy + 3.5, 'text-anchor': 'end' }, svgEl).textContent =
+        e < 0 ? '0.' + '0'.repeat(-e - 1) + '1' : Math.pow(10, e).toString();
+    }
+    for (let i = 0; i <= 5; i++) {
+      const gx = x(i / 5);
+      svg('line', { class: 'grid', x1: gx, x2: gx, y1: pad.t, y2: H - pad.b }, svgEl);
+      svg('text', { x: gx, y: H - pad.b + 18, 'text-anchor': 'middle' }, svgEl).textContent = (i / 5).toFixed(1);
+    }
+    svg('line', { class: 'axis', x1: pad.l, x2: W - pad.r, y1: y(5), y2: y(5), 'stroke-dasharray': '5 4' }, svgEl);
+    svg('text', { class: 'lbl', x: pad.l + 8, y: y(5) - 7 }, svgEl).textContent = 'registration failure threshold, 5\u00b0';
+    svg('text', { class: 'lbl', x: (pad.l + W - pad.r) / 2, y: H - 12, 'text-anchor': 'middle' }, svgEl)
+      .textContent = 'inlier ratio of predicted correspondences';
+    svg('text', { class: 'lbl', x: 16, y: (pad.t + H - pad.b) / 2, transform: 'rotate(-90 16 ' + ((pad.t + H - pad.b) / 2) + ')', 'text-anchor': 'middle' }, svgEl)
+      .textContent = 'rotation error (degrees, log)';
+
+    DATA.runs.forEach(run => {
+      if (!shown.has(run.tag)) return;
+      const color = runColor(run.tag);
+      const round = run.rotation === 'so3';
+      run.records.forEach(r => {
+        const cx = x(r.ir), cy = y(r.rre);
+        const node = round
+          ? svg('circle', { class: 'dot', cx, cy, r: 3.2, fill: 'none', stroke: color, 'stroke-width': 1.2, opacity: .75 }, svgEl)
+          : svg('rect', { class: 'dot', x: cx - 2.7, y: cy - 2.7, width: 5.4, height: 5.4, fill: 'none', stroke: color, 'stroke-width': 1.2, opacity: .75 }, svgEl);
+        hoverable(node, runLabel(run.tag) + '\n' + r.file + ' trial ' + r.trial +
+          '\nRRE ' + r.rre.toFixed(2) + '\u00b0  RMSE ' + r.rmse.toFixed(3) + ' mm' +
+          '\ninliers ' + (100 * r.ir).toFixed(0) + '%  ' + r.corr + ' correspondences');
+      });
+    });
+  }
+
+  legendItems(document.getElementById('scatter-legend'),
+    DATA.runs.map(run => ({ id: run.tag, label: runLabel(run.tag), color: runColor(run.tag), hollow: true })),
+    (id, on) => { on ? shown.add(id) : shown.delete(id); render(); });
+
+  addEventListener('resize', render);
+  render();
+  return { render };
+})();
+
+/* -------------------------------------------------------- per specimen */
+const specimens = (() => {
+  const svgEl = document.getElementById('specimen-chart');
+  const tags = DATA.runs.filter(r => r.model === '3dmatch').map(r => r.tag);
+  const shown = new Set(tags);
+  let sortBy = 'difficulty';
+
+  const byTag = {};
+  tags.forEach(tag => {
+    const map = {};
+    runById[tag].records.forEach(r => (map[r.file] = map[r.file] || []).push(r.rmse));
+    byTag[tag] = map;
+  });
+  const names = Object.keys(byTag[tags[0]]);
+
+  function render() {
+    const active = tags.filter(t => shown.has(t));
+    const order = sortBy === 'id'
+      ? [...names].sort()
+      : [...names].sort((a, b) => mean(byTag[tags[0]][a]) - mean(byTag[tags[0]][b]));
+    const rowH = 21, W = svgEl.clientWidth || 900, H = order.length * rowH + 62;
+    const pad = { l: 70, r: 24, t: 12, b: 42 };
+    svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svgEl.setAttribute('height', H);
+    svgEl.innerHTML = '';
+
+    let hi = 0;
+    active.forEach(t => names.forEach(n => byTag[t][n].forEach(v => { hi = Math.max(hi, v); })));
+    hi *= 1.05;
+    const x = v => pad.l + v / hi * (W - pad.l - pad.r);
+
+    for (let i = 0; i <= 8; i++) {
+      const gx = pad.l + (W - pad.l - pad.r) * i / 8;
+      svg('line', { class: 'grid', x1: gx, x2: gx, y1: pad.t, y2: H - pad.b }, svgEl);
+      svg('text', { x: gx, y: H - pad.b + 18, 'text-anchor': 'middle' }, svgEl).textContent = (hi * i / 8).toFixed(2);
+    }
+    svg('text', { class: 'lbl', x: (pad.l + W - pad.r) / 2, y: H - 10, 'text-anchor': 'middle' }, svgEl)
+      .textContent = 'point RMSE after registration (mm)';
+
+    order.forEach((name, i) => {
+      const yc = pad.t + rowH * (i + 0.5);
+      svg('text', { x: pad.l - 10, y: yc + 3.5, 'text-anchor': 'end' }, svgEl).textContent = name;
+      active.forEach((tag, ti) => {
+        const color = ti === 0 ? css('--ref') : css('--src');
+        const vals = byTag[tag][name];
+        const off = (ti - (active.length - 1) / 2) * 6;
+        svg('line', {
+          x1: x(Math.min(...vals)), x2: x(Math.max(...vals)), y1: yc + off, y2: yc + off,
+          stroke: color, 'stroke-width': 1.3, opacity: .55,
+        }, svgEl);
+        const dot = svg('circle', { class: 'dot', cx: x(mean(vals)), cy: yc + off, r: 3.4, fill: color }, svgEl);
+        hoverable(dot, name + ' \u2014 ' + runLabel(tag) +
+          '\nmean ' + mean(vals).toFixed(3) + ' mm' +
+          '\ntrials ' + vals.map(v => v.toFixed(3)).join(', '));
+      });
+    });
+  }
+
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+
+  chipGroup(document.getElementById('sort-chips'),
+    [{ id: 'difficulty', label: 'Sort by error' }, { id: 'id', label: 'Sort by specimen' }],
+    'difficulty', id => { sortBy = id; render(); });
+  legendItems(document.getElementById('specimen-legend'),
+    tags.map((t, i) => ({ id: t, label: runLabel(t), color: i === 0 ? css('--ref') : css('--src') })),
+    (id, on) => { on ? shown.add(id) : shown.delete(id); render(); });
+
+  addEventListener('resize', render);
+  render();
+  return { render };
+})();
+
+buildTiles();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  sixdof.render(); runs.render(); scatter.render(); specimens.render(); viewer.redraw();
+});
+</script>
