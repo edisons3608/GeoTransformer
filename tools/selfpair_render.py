@@ -26,7 +26,7 @@ sys.path.insert(0, REPO_DIR)
 sys.path.insert(0, osp.join(REPO_DIR, 'tools'))
 
 from selfpair_eval import (  # noqa: E402
-    EXPERIMENTS, DEFAULT_WEIGHTS, DEFAULT_NUM_POINTS, build_pair, normalize_frame,
+    EXPERIMENTS, DEFAULT_WEIGHTS, DEFAULT_NUM_POINTS, build_pair, normalize_frame, load_pair_meshes,
     apply_transform, registration_error, sixdof_error, make_parser as eval_parser,
 )
 
@@ -48,6 +48,10 @@ def make_parser():
     parser.add_argument('--weights', default=None)
     parser.add_argument('--data_dir', default=r'C:\Users\esun3\Documents\talus_small')
     parser.add_argument('--pattern', default='*.stl')
+    parser.add_argument('--src_dir', default=None,
+                        help='sample the transformed side from the matching mesh here; '
+                             'the reference stays the full dense mesh')
+    parser.add_argument('--noise_sides', default='both', choices=['both', 'src'])
     parser.add_argument('--cases', nargs='+', default=['0:0'], help='mesh_index:trial pairs')
     parser.add_argument('--rotation_mode', default='so3', choices=['euler', 'so3'])
     parser.add_argument('--rotation_magnitude', type=float, default=180.0)
@@ -96,6 +100,7 @@ def main():
     pair_args.rotation_mode = args.rotation_mode
     pair_args.rotation_magnitude = args.rotation_magnitude
     pair_args.seed = args.seed
+    pair_args.noise_sides = args.noise_sides
 
     files = sorted(glob.glob(osp.join(args.data_dir, args.pattern)))
     model = create_model(cfg).cuda()
@@ -107,10 +112,10 @@ def main():
     calib_cache = []
     for case in args.cases:
         mesh_id, trial = (int(x) for x in case.split(':'))
-        mesh = trimesh.load(files[mesh_id], process=False)
+        mesh, src_mesh = load_pair_meshes(files[mesh_id], args.src_dir)
         center, radius = normalize_frame(mesh, seed=args.seed + mesh_id)
         rng = np.random.default_rng([args.seed, mesh_id, trial])
-        data_dict = build_pair(mesh, pair_args, rng, center, radius)
+        data_dict = build_pair(mesh, pair_args, rng, center, radius, src_mesh)
 
         if args.neighbor_limits is not None:
             neighbor_limits = args.neighbor_limits
@@ -133,8 +138,9 @@ def main():
 
         ref = np.asarray(data_dict['ref_points'], dtype=np.float64)
         src = np.asarray(data_dict['src_points'], dtype=np.float64)
-        keep = np.random.default_rng(0).choice(len(ref), min(args.plot_points, len(ref)), replace=False)
-        ref_plot, src_plot = ref[keep], src[keep]
+        rng_draw = np.random.default_rng(0)
+        ref_plot = ref[rng_draw.choice(len(ref), min(args.plot_points, len(ref)), replace=False)]
+        src_plot = src[rng_draw.choice(len(src), min(args.plot_points, len(src)), replace=False)]
         src_aligned = apply_transform(src_plot, est)
 
         # residual = how far each aligned source point sits from where the gt transform puts it

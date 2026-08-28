@@ -58,11 +58,28 @@ def make_parser():
     parser.add_argument('--noise_sigma', type=float, default=0.01, help='jitter std in normalized units')
     parser.add_argument('--noise_clip', type=float, default=0.05, help='jitter clip in normalized units')
     parser.add_argument('--keep_ratio', type=float, default=None, help='plane crop keep ratio (None: full overlap)')
+    parser.add_argument('--src_dir', default=None,
+                        help='sample the transformed side from the matching mesh in this directory '
+                             '(e.g. painted-region patches); the reference stays the full dense mesh')
+    parser.add_argument('--noise_sides', default='both', choices=['both', 'src'],
+                        help='jitter both clouds, or only the transformed one')
     parser.add_argument('--scale', type=float, default=1.0, help='multiplier applied after unit-sphere normalization')
     parser.add_argument('--seed', type=int, default=7351)
     parser.add_argument('--tag', default=None, help='name for the output files')
     parser.add_argument('--output_dir', default=osp.join(REPO_DIR, 'output', 'selfpair'))
     return parser
+
+
+def load_pair_meshes(path, src_dir=None):
+    r"""The full mesh, plus its region patch when one is supplied."""
+    mesh = trimesh.load(path, process=False)
+    src_mesh = None
+    if src_dir:
+        src_path = osp.join(src_dir, osp.basename(path))
+        if not osp.exists(src_path):
+            raise RuntimeError('no matching source mesh at ' + src_path)
+        src_mesh = trimesh.load(src_path, process=False)
+    return mesh, src_mesh
 
 
 def normalize_frame(mesh, seed, num_probe=100000):
@@ -117,9 +134,22 @@ def crop_with_plane(points, keep_ratio, rng):
     return points[indices]
 
 
-def build_pair(mesh, args, rng, center, radius):
+def build_pair(mesh, args, rng, center, radius, src_mesh=None):
+    r"""One registration pair.
+
+    The reference is always sampled from `mesh`. When `src_mesh` is given (a
+    region patch of the same shape) the transformed side is sampled from that
+    patch instead, at the reference's surface density, and in the reference's
+    normalization frame -- so the ground-truth transform still puts the patch
+    back exactly where it belongs on the whole bone.
+    """
     ref_points = sample_cloud(mesh, args.num_points, center, radius, rng)
-    src_points = sample_cloud(mesh, args.num_points, center, radius, rng)  # independent ("twice") sampling
+    if src_mesh is None:
+        # independent ("twice") sampling of the same surface
+        src_points = sample_cloud(mesh, args.num_points, center, radius, rng)
+    else:
+        num_src = max(512, int(round(args.num_points * src_mesh.area / mesh.area)))
+        src_points = sample_cloud(src_mesh, num_src, center, radius, rng)
 
     transform = random_transform(rng, args.rotation_mode, args.rotation_magnitude, args.translation_magnitude)
     src_points = apply_transform(src_points, inverse_transform(transform))  # so that T maps src -> ref
@@ -129,7 +159,8 @@ def build_pair(mesh, args, rng, center, radius):
         src_points = crop_with_plane(src_points, args.keep_ratio, rng)
 
     if args.noise_sigma > 0:
-        ref_points = jitter(ref_points, args.noise_sigma, args.noise_clip, rng)
+        if args.noise_sides == 'both':
+            ref_points = jitter(ref_points, args.noise_sigma, args.noise_clip, rng)
         src_points = jitter(src_points, args.noise_sigma, args.noise_clip, rng)
 
     # apply the working scale of the model (the translation scales with the points)
@@ -212,11 +243,11 @@ def main():
     # limits are calibrated on exactly this data
     pairs, meta = [], []
     for mesh_id, path in enumerate(files):
-        mesh = trimesh.load(path, process=False)
+        mesh, src_mesh = load_pair_meshes(path, args.src_dir)
         center, radius = normalize_frame(mesh, seed=args.seed + mesh_id)
         for trial in range(args.num_trials):
             rng = np.random.default_rng([args.seed, mesh_id, trial])
-            pairs.append(build_pair(mesh, args, rng, center, radius))
+            pairs.append(build_pair(mesh, args, rng, center, radius, src_mesh))
             meta.append({'file': osp.basename(path), 'trial': trial, 'radius_mm': float(radius)})
 
     calib = pairs[:: max(1, len(pairs) // 16)][:16]

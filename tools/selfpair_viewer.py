@@ -31,7 +31,7 @@ sys.path.insert(0, REPO_DIR)
 sys.path.insert(0, osp.join(REPO_DIR, 'tools'))
 
 from selfpair_eval import (  # noqa: E402
-    EXPERIMENTS, DEFAULT_WEIGHTS, DEFAULT_NUM_POINTS, build_pair, normalize_frame,
+    EXPERIMENTS, DEFAULT_WEIGHTS, DEFAULT_NUM_POINTS, build_pair, normalize_frame, load_pair_meshes,
     apply_transform, registration_error, sixdof_error, make_parser as eval_parser,
 )
 
@@ -42,6 +42,7 @@ RESIDUAL_RAMP = np.array([[0.804, 0.886, 0.984], [0.431, 0.655, 0.925],
                           [0.165, 0.471, 0.839], [0.063, 0.259, 0.506]])
 
 HELP = """
+  b       side-by-side before/after  <-> single view
   space   play / pause scrub        1 / 2   input pose / aligned pose
   left    scrub back                right   scrub forward
   r       residual colouring        c       correspondence lines
@@ -53,18 +54,50 @@ def make_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='3dmatch', choices=list(EXPERIMENTS.keys()))
     parser.add_argument('--weights', default=None)
-    parser.add_argument('--data_dir', default=osp.join(REPO_DIR, 'output', 'random_taluses', 'paint'))
+    parser.add_argument('--data_dir', default=osp.join(REPO_DIR, 'output', 'random_taluses'),
+                        help='meshes for the dense reference cloud')
     parser.add_argument('--pattern', default='*.stl')
+    parser.add_argument('--src_dir', default=osp.join(REPO_DIR, 'output', 'random_taluses', 'paint'),
+                        help='meshes for the transformed cloud (the painted region); '
+                             'pass "" to transform a full copy of the bone instead')
+    parser.add_argument('--noise_sides', default='src', choices=['src', 'both'])
     parser.add_argument('--cases', nargs='+', default=None,
-                        help='mesh_index:trial pairs (default: trial 0 of the first 6 meshes)')
+                        help='mesh_index:trial pairs (default: every mesh in the directory)')
+    parser.add_argument('--trials', type=int, default=1,
+                        help='random trials per mesh to step through (default 1)')
     parser.add_argument('--rotation_mode', default='so3', choices=['euler', 'so3'])
     parser.add_argument('--rotation_magnitude', type=float, default=180.0)
     parser.add_argument('--num_points', type=int, default=None)
     parser.add_argument('--draw_points', type=int, default=6000, help='points drawn per cloud')
     parser.add_argument('--neighbor_limits', type=int, nargs='+', default=None)
     parser.add_argument('--seed', type=int, default=7351)
+    parser.add_argument('--mode', default='compare', choices=['compare', 'scrub'],
+                        help='compare: before and after side by side; scrub: one view you animate')
     parser.add_argument('--selftest', action='store_true', help='build everything, skip opening the window')
     return parser
+
+
+TEXT_COLOR = np.array([0.09, 0.11, 0.13])
+TEXT_UNITS = 13.0  # cap height of Open3D's built-in font, in its own units
+
+
+def text_mesh(lines, height, color, anchor):
+    r"""Multi-line label as a flat mesh in the XY plane, top-left corner at `anchor`.
+
+    The legacy visualizer draws no text, so labels are geometry: they sit in the
+    scene and turn with it, which reads like an engraved caption.
+    """
+    merged = None
+    for i, line in enumerate(lines):
+        mesh = o3d.t.geometry.TriangleMesh.create_text(line, depth=0.0).to_legacy()
+        mesh.scale(height / TEXT_UNITS, center=(0, 0, 0))
+        mesh.translate((0.0, -i * height * 1.75, 0.0))
+        merged = mesh if merged is None else merged + mesh
+    merged.paint_uniform_color(color)
+    box = merged.get_axis_aligned_bounding_box()
+    merged.translate(np.asarray(anchor, dtype=float)
+                     - np.array([box.min_bound[0], box.max_bound[1], 0.0]))
+    return merged
 
 
 def ramp_colors(values, vmax):
@@ -98,13 +131,14 @@ class Session:
         if not self.files:
             raise RuntimeError('no meshes matching {} in {}'.format(args.pattern, args.data_dir))
         self.case_specs = [tuple(int(x) for x in c.split(':')) for c in args.cases] if args.cases \
-            else [(i, 0) for i in range(min(6, len(self.files)))]
+            else [(i, t) for i in range(len(self.files)) for t in range(args.trials)]
 
         self.pair_args = eval_parser().parse_args(['--model', args.model])
         self.pair_args.num_points = args.num_points
         self.pair_args.rotation_mode = args.rotation_mode
         self.pair_args.rotation_magnitude = args.rotation_magnitude
         self.pair_args.seed = args.seed
+        self.pair_args.noise_sides = args.noise_sides
 
         self.model = create_model(self.cfg).cuda()
         self.model.load_state_dict(torch.load(args.weights, map_location='cpu', weights_only=False)['model'])
@@ -117,10 +151,10 @@ class Session:
         if index in self.cache:
             return self.cache[index]
         mesh_id, trial = self.case_specs[index]
-        mesh = trimesh.load(self.files[mesh_id], process=False)
+        mesh, src_mesh = load_pair_meshes(self.files[mesh_id], self.args.src_dir)
         center, radius = normalize_frame(mesh, seed=self.pair_args.seed + mesh_id)
         rng = np.random.default_rng([self.pair_args.seed, mesh_id, trial])
-        data_dict = build_pair(mesh, self.pair_args, rng, center, radius)
+        data_dict = build_pair(mesh, self.pair_args, rng, center, radius, src_mesh)
 
         if self.neighbor_limits is None:
             self.neighbor_limits = self.calibrate(
@@ -139,9 +173,10 @@ class Session:
 
         ref = np.asarray(data_dict['ref_points'], dtype=np.float64) * mm
         src = np.asarray(data_dict['src_points'], dtype=np.float64) * mm
-        keep = np.random.default_rng(mesh_id).choice(
-            len(ref), min(self.args.draw_points, len(ref), len(src)), replace=False)
-        ref, src = ref[keep], src[keep]
+        # the two clouds can have different sizes (a region patch is smaller), so thin them separately
+        rng_draw = np.random.default_rng(mesh_id)
+        ref = ref[rng_draw.choice(len(ref), min(self.args.draw_points, len(ref)), replace=False)]
+        src = src[rng_draw.choice(len(src), min(self.args.draw_points, len(src)), replace=False)]
         est_mm, gt_mm = est.copy(), gt.copy()
         est_mm[:3, 3] *= mm
         gt_mm[:3, 3] *= mm
@@ -175,12 +210,23 @@ def main():
     args = make_parser().parse_args()
     session = Session(args)
 
-    state = {'index': 0, 'blend': 1.0, 'playing': False, 'direction': -1.0,
-             'residual': False, 'corr': False, 'last': time.time()}
+    state = {'index': 0, 'blend': 0.0 if args.mode == 'compare' else 1.0, 'playing': False,
+             'direction': 1.0, 'residual': False, 'corr': False, 'last': time.time(),
+             'compare': args.mode == 'compare'}
 
+    # station A (left) is the live one; station B (right) holds the fitted result
+    # so before and after can be read at once under a single orbit
     ref_pcd = o3d.geometry.PointCloud()
     src_pcd = o3d.geometry.PointCloud()
+    ref_b_pcd = o3d.geometry.PointCloud()
+    src_b_pcd = o3d.geometry.PointCloud()
     corr_lines = o3d.geometry.LineSet()
+
+    labels = []          # label meshes currently added to the window
+
+    def station_offset(case):
+        merged = np.vstack([case['ref'], case['src'], case['aligned']])
+        return np.array([1.5 * (merged[:, 0].max() - merged[:, 0].min()), 0.0, 0.0])
 
     def current():
         return session.case(state['index'])
@@ -197,20 +243,67 @@ def main():
         if vis is not None:
             vis.update_geometry(src_pcd)
 
+    def refresh_compare(vis=None):
+        case = current()
+        if state['compare']:
+            offset = station_offset(case)
+            ref_b_pcd.points = o3d.utility.Vector3dVector(case['ref'] + offset)
+            ref_b_pcd.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(case['ref']), 1)))
+            aligned = case['aligned'] + offset
+            src_b_pcd.points = o3d.utility.Vector3dVector(aligned)
+            colors = (ramp_colors(case['residual'], np.percentile(case['residual'], 98))
+                      if state['residual'] else np.tile(SRC_COLOR, (len(aligned), 1)))
+            src_b_pcd.colors = o3d.utility.Vector3dVector(colors)
+        else:
+            for pcd in (ref_b_pcd, src_b_pcd):
+                pcd.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+                pcd.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+        if vis is not None:
+            vis.update_geometry(ref_b_pcd)
+            vis.update_geometry(src_b_pcd)
+
+    def refresh_labels(vis=None):
+        case = current()
+        merged = np.vstack([case['ref'], case['src'], case['aligned']])
+        width = merged[:, 0].max() - merged[:, 0].min()
+        height = 0.045 * width
+        top = np.array([case['ref'][:, 0].min(), merged[:, 1].max() + 0.26 * width,
+                        case['ref'][:, 2].mean()])
+        rot, trans = case['rot_err'], case['trans_err']
+        error_lines = [
+            'RRE {:.2f} deg   RTE {:.3f} mm'.format(case['rre'], case['rte']),
+            'rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg'.format(*rot),
+            'tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'.format(*trans),
+        ]
+        name = '{}  trial {}'.format(case['name'], case['trial'])
+        position = '[{}/{}]'.format(state['index'] + 1, len(session.case_specs))
+
+        new = []
+        if state['compare']:
+            new.append(text_mesh([name, position + '  BEFORE FIT'],
+                                 height, TEXT_COLOR, top))
+            new.append(text_mesh(['AFTER FIT'] + error_lines, height, TEXT_COLOR,
+                                 top + station_offset(case)))
+        else:
+            new.append(text_mesh([name] + error_lines, height, TEXT_COLOR, top))
+
+        if vis is not None:
+            for old in labels:
+                vis.remove_geometry(old, reset_bounding_box=False)
+            for mesh in new:
+                vis.add_geometry(mesh, reset_bounding_box=False)
+        labels[:] = new
+
     def refresh_correspondences(vis=None):
         case = current()
-        if state['corr']:
+        if state['corr']:  # an empty LineSet warns every frame, so it is added only when shown
             step = max(1, len(case['corr_ref']) // 240)  # a readable sample of the matches
             a, b = case['corr_ref'][::step], case['corr_src'][::step]
             corr_lines.points = o3d.utility.Vector3dVector(np.vstack([a, b]))
             corr_lines.lines = o3d.utility.Vector2iVector(
                 np.stack([np.arange(len(a)), np.arange(len(a)) + len(a)], axis=1))
             corr_lines.colors = o3d.utility.Vector3dVector(np.tile(CORR_COLOR, (len(a), 1)))
-        else:
-            corr_lines.points = o3d.utility.Vector3dVector(
-                np.vstack([case['corr_ref'][:1], case['corr_src'][:1]]))
-            corr_lines.lines = o3d.utility.Vector2iVector(np.zeros((0, 2), dtype=np.int32))
-        if vis is not None:
+        if vis is not None and state['corr']:
             vis.update_geometry(corr_lines)
 
     def load_case(vis=None):
@@ -218,6 +311,8 @@ def main():
         ref_pcd.points = o3d.utility.Vector3dVector(case['ref'])
         ref_pcd.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(case['ref']), 1)))
         refresh_source(vis)
+        refresh_compare(vis)
+        refresh_labels(vis)
         refresh_correspondences(vis)
         if vis is not None:
             vis.update_geometry(ref_pcd)
@@ -236,10 +331,17 @@ def main():
     vis.create_window(window_name='GeoTransformer self-pair viewer', width=1440, height=900)
     vis.add_geometry(ref_pcd)
     vis.add_geometry(src_pcd)
-    vis.add_geometry(corr_lines)
+    if state['compare']:
+        vis.add_geometry(ref_b_pcd)
+        vis.add_geometry(src_b_pcd)
+    refresh_labels()
+    for mesh in labels:
+        vis.add_geometry(mesh)
+
     opt = vis.get_render_option()
     opt.background_color = np.array([0.988, 0.988, 0.984])
     opt.point_size = 2.5
+    opt.mesh_show_back_face = True   # labels are flat meshes; never cull them
 
     def set_blend(value, vis):
         state['blend'] = float(np.clip(value, 0.0, 1.0))
@@ -258,16 +360,21 @@ def main():
 
     def toggle_residual(vis):
         state['residual'] = not state['residual']
-        if state['residual']:
+        if state['residual'] and not state['compare']:
             state['blend'] = 1.0
         refresh_source(vis)
+        refresh_compare(vis)
         print('  residual colouring {} (0 .. {:.3f} mm at the 98th percentile)'.format(
             'on' if state['residual'] else 'off', np.percentile(current()['residual'], 98)))
         return True
 
     def toggle_corr(vis):
         state['corr'] = not state['corr']
-        refresh_correspondences(vis)
+        if state['corr']:
+            refresh_correspondences()
+            vis.add_geometry(corr_lines, reset_bounding_box=False)
+        else:
+            vis.remove_geometry(corr_lines, reset_bounding_box=False)
         return True
 
     def animate(vis):
@@ -290,6 +397,24 @@ def main():
     vis.register_key_callback(ord('C'), toggle_corr)
     vis.register_key_callback(ord('N'), lambda v: step_case(1, v))
     vis.register_key_callback(ord('P'), lambda v: step_case(-1, v))
+    def toggle_compare(vis):
+        state['compare'] = not state['compare']
+        if state['compare']:
+            state['blend'], state['playing'] = 0.0, False
+            vis.add_geometry(ref_b_pcd, reset_bounding_box=False)
+            vis.add_geometry(src_b_pcd, reset_bounding_box=False)
+        else:
+            vis.remove_geometry(ref_b_pcd, reset_bounding_box=False)
+            vis.remove_geometry(src_b_pcd, reset_bounding_box=False)
+        refresh_source(vis)
+        refresh_compare(vis)
+        refresh_labels(vis)
+        vis.reset_view_point(True)
+        print('  {}'.format('side-by-side: left = before fit, right = after fit'
+                            if state['compare'] else 'single view: scrub with space / arrows'))
+        return True
+
+    vis.register_key_callback(ord('B'), toggle_compare)
     vis.register_key_callback(ord('H'), lambda v: (print(HELP), True)[1])
     vis.register_animation_callback(animate)
 
