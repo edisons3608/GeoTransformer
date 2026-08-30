@@ -242,13 +242,17 @@ def main():
             src_corr = apply_transform(np.asarray(output['src_corr_points'], dtype=np.float64), gt)
             ir = float((np.linalg.norm(ref_corr - src_corr, axis=1) < cfg.eval.acceptance_radius).mean()) \
                 if len(ref_corr) else 0.0
-            records.append({'seed': int(seed), 'rre_deg': float(rre), 'rte_mm': float(rte * radius),
+            src_points = np.asarray(output['src_points'], dtype=np.float64)
+            rmse = np.linalg.norm(apply_transform(src_points, est) - apply_transform(src_points, gt), axis=1).mean()
+            records.append({'seed': int(seed), 'file': 'seed_{}'.format(seed), 'trial': 0,
+                            'rmse_mm': float(rmse * radius),
+                            'rre_deg': float(rre), 'rte_mm': float(rte * radius),
                             'rot_err_deg': [float(x) for x in rot],
                             'trans_err_mm': [float(x * radius) for x in trans],
                             'inlier_ratio': ir, 'num_corr': int(output['corr_scores'].shape[0])})
         rre = np.array([r['rre_deg'] for r in records])
         rte = np.array([r['rte_mm'] for r in records])
-        summary = {'recall_5deg_2mm': float(np.mean((rre < 5) & (rte < 2))),
+        summary = {'tag': tag, 'recall_5deg_2mm': float(np.mean((rre < 5) & (rte < 2))),
                    'recall_10deg_5mm': float(np.mean((rre < 10) & (rte < 5))),
                    'rre_p50': float(np.median(rre)),
                    'mean_inlier_ratio': float(np.mean([r['inlier_ratio'] for r in records]))}

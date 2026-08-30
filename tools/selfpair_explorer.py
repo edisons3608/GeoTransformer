@@ -41,7 +41,9 @@ def load_runs(results_dir, only=None):
     for path in sorted(glob.glob(osp.join(results_dir, '*.json'))):
         with open(path) as f:
             data = json.load(f)
-        tag = data['summary']['tag']
+        if 'summary' not in data or 'records' not in data:
+            continue          # training history and other bookkeeping files live here too
+        tag = data['summary'].get('tag', osp.splitext(osp.basename(path))[0])
         if only and tag not in only:
             continue
         if 'rot_err_deg' not in data['records'][0]:

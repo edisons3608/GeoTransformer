@@ -17,6 +17,7 @@ Keys (also printed in the console):
 import argparse
 import glob
 import importlib
+import json
 import os.path as osp
 import sys
 import time
@@ -71,6 +72,14 @@ def make_parser():
     parser.add_argument('--draw_points', type=int, default=6000, help='points drawn per cloud')
     parser.add_argument('--neighbor_limits', type=int, nargs='+', default=None)
     parser.add_argument('--seed', type=int, default=7351)
+    parser.add_argument('--pair_source', default='patch', choices=['patch', 'landmarks'],
+                        help='patch: transformed cloud is a region surface patch; '
+                             'landmarks: a few points sampled from each landmark region')
+    parser.add_argument('--model_file', default=None, help='SSM h5 with landmark regions (--pair_source landmarks)')
+    parser.add_argument('--points_per_region', type=int, default=4)
+    parser.add_argument('--points_in_patch', type=int, default=0, help='0 = auto, as in training')
+    parser.add_argument('--test_seed', type=int, default=909, help='first shape seed for landmark cases')
+    parser.add_argument('--num_cases', type=int, default=10)
     parser.add_argument('--mode', default='compare', choices=['compare', 'scrub'],
                         help='compare: before and after side by side; scrub: one view you animate')
     parser.add_argument('--selftest', action='store_true', help='build everything, skip opening the window')
@@ -100,6 +109,25 @@ def text_mesh(lines, height, color, anchor):
     return merged
 
 
+def sphere_cloud(points, colors, radius):
+    r"""One mesh of small spheres, so a handful of landmark points stay visible."""
+    unit = o3d.geometry.TriangleMesh.create_sphere(radius=radius, resolution=6)
+    unit.compute_vertex_normals()
+    base = np.asarray(unit.vertices)
+    triangles = np.asarray(unit.triangles)
+    vertices, faces, vertex_colors = [], [], []
+    for i, point in enumerate(points):
+        vertices.append(base + point)
+        faces.append(triangles + i * len(base))
+        vertex_colors.append(np.tile(colors[i], (len(base), 1)))
+    mesh = o3d.geometry.TriangleMesh(
+        o3d.utility.Vector3dVector(np.vstack(vertices)),
+        o3d.utility.Vector3iVector(np.vstack(faces)))
+    mesh.vertex_colors = o3d.utility.Vector3dVector(np.vstack(vertex_colors))
+    mesh.compute_vertex_normals()
+    return mesh
+
+
 def ramp_colors(values, vmax):
     t = np.clip(values / max(vmax, 1e-9), 0, 0.999) * (len(RESIDUAL_RAMP) - 1)
     lo = np.floor(t).astype(int)
@@ -120,6 +148,13 @@ class Session:
         exp_dir = osp.join(REPO_DIR, 'experiments', EXPERIMENTS[args.model])
         sys.path.insert(0, exp_dir)
         self.cfg = importlib.import_module('config').make_cfg()
+        self.landmarks = None
+        if args.pair_source == 'landmarks':
+            from train_landmarks import LandmarkShapes, DEFAULT_MODEL
+            self.landmarks = LandmarkShapes(args.model_file or DEFAULT_MODEL, '95%', args.points_per_region)
+            num_src = 6 * args.points_per_region
+            # must match training: 64 points per patch exceeds the whole sparse cloud
+            self.cfg.model.num_points_in_patch = args.points_in_patch or max(4, min(64, num_src // 2))
         create_model = importlib.import_module('model').create_model
         from geotransformer.utils.data import registration_collate_fn_stack_mode, calibrate_neighbors_stack_mode
         from geotransformer.utils.torch import to_cuda, release_cuda
@@ -127,11 +162,17 @@ class Session:
         self.calibrate = calibrate_neighbors_stack_mode
         self.to_cuda, self.release_cuda = to_cuda, release_cuda
 
-        self.files = sorted(glob.glob(osp.join(args.data_dir, args.pattern)))
-        if not self.files:
-            raise RuntimeError('no meshes matching {} in {}'.format(args.pattern, args.data_dir))
-        self.case_specs = [tuple(int(x) for x in c.split(':')) for c in args.cases] if args.cases \
-            else [(i, t) for i in range(len(self.files)) for t in range(args.trials)]
+        if self.landmarks is not None:
+            # shapes come from the SSM by seed, not from files on disk
+            self.files = []
+            self.case_specs = [tuple(int(x) for x in c.split(':')) for c in args.cases] if args.cases \
+                else [(args.test_seed + i, 0) for i in range(args.num_cases)]
+        else:
+            self.files = sorted(glob.glob(osp.join(args.data_dir, args.pattern)))
+            if not self.files:
+                raise RuntimeError('no meshes matching {} in {}'.format(args.pattern, args.data_dir))
+            self.case_specs = [tuple(int(x) for x in c.split(':')) for c in args.cases] if args.cases \
+                else [(i, t) for i in range(len(self.files)) for t in range(args.trials)]
 
         self.pair_args = eval_parser().parse_args(['--model', args.model])
         self.pair_args.num_points = args.num_points
@@ -144,6 +185,14 @@ class Session:
         self.model.load_state_dict(torch.load(args.weights, map_location='cpu', weights_only=False)['model'])
         self.model.eval()
         self.neighbor_limits = args.neighbor_limits
+        if self.neighbor_limits is None:
+            # a run's limits are part of its result: re-calibrating here would
+            # silently produce numbers that differ from the scored ones
+            history_path = osp.join(osp.dirname(osp.abspath(args.weights)), 'history.json')
+            if osp.exists(history_path):
+                with open(history_path) as f:
+                    self.neighbor_limits = json.load(f)['neighbor_limits']
+                print('neighbor limits {} (from {})'.format(self.neighbor_limits, history_path), flush=True)
         self.cache = {}
 
     def case(self, index):
@@ -151,10 +200,15 @@ class Session:
         if index in self.cache:
             return self.cache[index]
         mesh_id, trial = self.case_specs[index]
-        mesh, src_mesh = load_pair_meshes(self.files[mesh_id], self.args.src_dir)
-        center, radius = normalize_frame(mesh, seed=self.pair_args.seed + mesh_id)
-        rng = np.random.default_rng([self.pair_args.seed, mesh_id, trial])
-        data_dict = build_pair(mesh, self.pair_args, rng, center, radius, src_mesh)
+        if self.landmarks is not None:
+            data_dict, radius = self.landmarks.pair(mesh_id, self.pair_args)
+            name = 'seed {}'.format(mesh_id)
+        else:
+            mesh, src_mesh = load_pair_meshes(self.files[mesh_id], self.args.src_dir)
+            center, radius = normalize_frame(mesh, seed=self.pair_args.seed + mesh_id)
+            rng = np.random.default_rng([self.pair_args.seed, mesh_id, trial])
+            data_dict = build_pair(mesh, self.pair_args, rng, center, radius, src_mesh)
+            name = osp.splitext(osp.basename(self.files[mesh_id]))[0]
 
         if self.neighbor_limits is None:
             self.neighbor_limits = self.calibrate(
@@ -187,7 +241,7 @@ class Session:
         rot_err, trans_err = sixdof_error(gt, est)
 
         case = {
-            'name': osp.splitext(osp.basename(self.files[mesh_id]))[0],
+            'name': name,
             'trial': trial, 'ref': ref, 'src': src, 'aligned': aligned, 'residual': residual,
             'rre': float(rre), 'rte': float(rte * mm), 'time': elapsed,
             'rot_err': rot_err, 'trans_err': trans_err * mm,
@@ -216,10 +270,11 @@ def main():
 
     # station A (left) is the live one; station B (right) holds the fitted result
     # so before and after can be read at once under a single orbit
+    sparse = args.pair_source == 'landmarks'
     ref_pcd = o3d.geometry.PointCloud()
-    src_pcd = o3d.geometry.PointCloud()
+    src_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
     ref_b_pcd = o3d.geometry.PointCloud()
-    src_b_pcd = o3d.geometry.PointCloud()
+    src_b_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
     corr_lines = o3d.geometry.LineSet()
 
     labels = []          # label meshes currently added to the window
@@ -231,15 +286,26 @@ def main():
     def current():
         return session.case(state['index'])
 
+    def marker_radius(case):
+        span = np.ptp(case['ref'], axis=0).max()
+        return 0.018 * span
+
     def refresh_source(vis=None):
         case = current()
         points = case['src'] + (case['aligned'] - case['src']) * state['blend']
-        src_pcd.points = o3d.utility.Vector3dVector(points)
         if state['residual'] and state['blend'] > 0.999:
             colors = ramp_colors(case['residual'], np.percentile(case['residual'], 98))
         else:
             colors = np.tile(SRC_COLOR, (len(points), 1))
-        src_pcd.colors = o3d.utility.Vector3dVector(colors)
+        if sparse:
+            blob = sphere_cloud(points, colors, marker_radius(case))
+            src_pcd.vertices = blob.vertices
+            src_pcd.triangles = blob.triangles
+            src_pcd.vertex_colors = blob.vertex_colors
+            src_pcd.vertex_normals = blob.vertex_normals
+        else:
+            src_pcd.points = o3d.utility.Vector3dVector(points)
+            src_pcd.colors = o3d.utility.Vector3dVector(colors)
         if vis is not None:
             vis.update_geometry(src_pcd)
 
@@ -250,14 +316,26 @@ def main():
             ref_b_pcd.points = o3d.utility.Vector3dVector(case['ref'] + offset)
             ref_b_pcd.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(case['ref']), 1)))
             aligned = case['aligned'] + offset
-            src_b_pcd.points = o3d.utility.Vector3dVector(aligned)
             colors = (ramp_colors(case['residual'], np.percentile(case['residual'], 98))
                       if state['residual'] else np.tile(SRC_COLOR, (len(aligned), 1)))
-            src_b_pcd.colors = o3d.utility.Vector3dVector(colors)
+            if sparse:
+                blob = sphere_cloud(aligned, colors, marker_radius(case))
+                src_b_pcd.vertices = blob.vertices
+                src_b_pcd.triangles = blob.triangles
+                src_b_pcd.vertex_colors = blob.vertex_colors
+                src_b_pcd.vertex_normals = blob.vertex_normals
+            else:
+                src_b_pcd.points = o3d.utility.Vector3dVector(aligned)
+                src_b_pcd.colors = o3d.utility.Vector3dVector(colors)
         else:
-            for pcd in (ref_b_pcd, src_b_pcd):
-                pcd.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
-                pcd.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            ref_b_pcd.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            ref_b_pcd.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            if sparse:
+                src_b_pcd.vertices = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+                src_b_pcd.triangles = o3d.utility.Vector3iVector(np.zeros((0, 3), dtype=np.int32))
+            else:
+                src_b_pcd.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+                src_b_pcd.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
         if vis is not None:
             vis.update_geometry(ref_b_pcd)
             vis.update_geometry(src_b_pcd)
