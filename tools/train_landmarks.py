@@ -71,6 +71,8 @@ def make_parser():
     parser.add_argument('--train_seed', type=int, default=101)
     parser.add_argument('--test_seed', type=int, default=909)
     parser.add_argument('--max_steps', type=int, default=None)
+    parser.add_argument('--resume', nargs='?', const='auto', default=None,
+                        help="continue a run: 'auto' takes last.pth.tar from the run's own directory")
     return parser
 
 
@@ -267,6 +269,28 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay)
 
+    start_epoch = 0
+    history, best = [], {'epoch': -1, 'val_rre': float('inf')}
+    if args.resume:
+        resume_path = osp.join(out_dir, 'last.pth.tar') if args.resume == 'auto' else args.resume
+        checkpoint = torch.load(resume_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint['model'])
+        if 'optimizer' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+        else:
+            print('checkpoint has no optimizer state -- Adam moments restart', flush=True)
+        start_epoch = checkpoint['epoch'] + 1
+        for _ in range(start_epoch):
+            scheduler.step()          # put the decayed lr back where it was
+        history_path = osp.join(out_dir, 'history.json')
+        if osp.exists(history_path):
+            with open(history_path) as f:
+                previous = json.load(f)
+            history = [e for e in previous['history'] if e['epoch'] < start_epoch]
+            best = previous['best']
+        print('resuming {} at epoch {} (lr {:.2e}, best val RRE {:.2f})'.format(
+            osp.basename(resume_path), start_epoch, scheduler.get_last_lr()[0], best['val_rre']), flush=True)
+
     def run(data_dict, train):
         collated = to_cuda(collate([data_dict], cfg.backbone.num_stages, cfg.backbone.init_voxel_size,
                                    cfg.backbone.init_radius, neighbor_limits))
@@ -281,9 +305,10 @@ def main():
             metrics = evaluator(output, collated)
         return {k: float(v.detach()) for k, v in list(losses.items()) + list(metrics.items())}
 
-    history, best, step = [], {'epoch': -1, 'val_rre': float('inf')}, 0
+    step = 0
+    elapsed_before = history[-1]['minutes'] if history else 0.0
     start = time.time()
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         stats = []
         for i in np.random.permutation(len(train_seeds)):
@@ -302,15 +327,15 @@ def main():
                  'train_loss': mean(stats, 'loss'), 'train_IR': mean(stats, 'IR'), 'train_PIR': mean(stats, 'PIR'),
                  'val_loss': mean(val_stats, 'loss'), 'val_IR': mean(val_stats, 'IR'),
                  'val_RRE': mean(val_stats, 'RRE'), 'val_RR': mean(val_stats, 'RR'),
-                 'minutes': (time.time() - start) / 60}
+                 'minutes': elapsed_before + (time.time() - start) / 60}
         history.append(entry)
         print('epoch {:3d}  loss {:.4f}  PIR {:.3f}  IR {:.3f}  |  val loss {:.4f}  IR {:.3f}  RRE {:7.2f}  '
               'RR {:.2f}  [{:.1f} min]'.format(epoch, entry['train_loss'], entry['train_PIR'], entry['train_IR'],
                                                entry['val_loss'], entry['val_IR'], entry['val_RRE'],
                                                entry['val_RR'], entry['minutes']), flush=True)
 
-        torch.save({'model': model.state_dict(), 'epoch': epoch, 'args': vars(args)},
-                   osp.join(out_dir, 'last.pth.tar'))
+        torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                    'epoch': epoch, 'args': vars(args)}, osp.join(out_dir, 'last.pth.tar'))
         if entry['val_RRE'] < best['val_rre']:
             best = {'epoch': epoch, 'val_rre': entry['val_RRE']}
             torch.save({'model': model.state_dict(), 'epoch': epoch, 'args': vars(args)},
