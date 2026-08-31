@@ -33,7 +33,7 @@ sys.path.insert(0, osp.join(REPO_DIR, 'tools'))
 
 from selfpair_eval import (  # noqa: E402
     EXPERIMENTS, DEFAULT_WEIGHTS, DEFAULT_NUM_POINTS, build_pair, normalize_frame, load_pair_meshes,
-    apply_transform, registration_error, sixdof_error, make_parser as eval_parser,
+    apply_transform, registration_error, sixdof_error, ransac_icp, make_parser as eval_parser,
 )
 
 REF_COLOR = np.array([0.165, 0.471, 0.839])   # blue
@@ -88,6 +88,8 @@ def make_parser():
     parser.add_argument('--num_cases', type=int, default=10)
     parser.add_argument('--mode', default='compare', choices=['compare', 'scrub'],
                         help='compare: before and after side by side; scrub: one view you animate')
+    parser.add_argument('--baseline', default='ransac_icp', choices=['ransac_icp', 'off'],
+                        help='third station: RANSAC over the same correspondences, then ICP')
     parser.add_argument('--selftest', action='store_true', help='build everything, skip opening the window')
     return parser
 
@@ -268,6 +270,25 @@ class Session:
         rre, rte = registration_error(gt, est)
         rot_err, trans_err = sixdof_error(gt, est)
 
+        baseline = None
+        if self.args.baseline == 'ransac_icp':
+            # same correspondences, classical estimator, in the normalized frame
+            fit, _ = ransac_icp(np.asarray(data_dict['ref_points'], dtype=np.float64),
+                                np.asarray(data_dict['src_points'], dtype=np.float64),
+                                np.asarray(output['ref_corr_points'], dtype=np.float64),
+                                np.asarray(output['src_corr_points'], dtype=np.float64),
+                                mesh=ghost)
+            fit_mm = fit.copy()
+            fit_mm[:3, 3] *= mm
+            b_rre, b_rte = registration_error(gt, fit)
+            b_rot, b_trans = sixdof_error(gt, fit)
+            baseline = {
+                'aligned': apply_transform(src, fit_mm),
+                'residual': np.linalg.norm(apply_transform(src, fit_mm) - apply_transform(src, gt_mm), axis=1),
+                'rre': float(b_rre), 'rte': float(b_rte * mm),
+                'rot_err': b_rot, 'trans_err': b_trans * mm,
+            }
+
         case = {
             'name': name,
             'trial': trial, 'ref': ref, 'src': src, 'aligned': aligned, 'residual': residual,
@@ -276,17 +297,24 @@ class Session:
             'corr_ref': np.asarray(output['ref_corr_points'], dtype=np.float64) * mm,
             'corr_src': apply_transform(np.asarray(output['src_corr_points'], dtype=np.float64) * mm, est_mm),
             'ghost': (ghost[0] * mm, ghost[1]),
+            'baseline': baseline,
         }
         self.cache[index] = case
         return case
 
 
 def describe(case, index, total):
-    return ('\n[{}/{}] {}  trial {}\n'
-            '  RRE {:.2f} deg   RTE {:.3f} mm   mean residual {:.3f} mm   ({:.2f}s on GPU)\n'
-            '  6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
+    text = ('\n[{}/{}] {}  trial {}\n'
+            '  GeoTransformer  RRE {:.2f} deg  RTE {:.3f} mm  mean residual {:.3f} mm  ({:.2f}s on GPU)\n'
+            '    6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
             .format(index + 1, total, case['name'], case['trial'], case['rre'], case['rte'],
                     case['residual'].mean(), case['time'], *case['rot_err'], *case['trans_err']))
+    if case.get('baseline'):
+        b = case['baseline']
+        text += ('\n  RANSAC + ICP    RRE {:.2f} deg  RTE {:.3f} mm  mean residual {:.3f} mm\n'
+                 '    6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
+                 .format(b['rre'], b['rte'], b['residual'].mean(), *b['rot_err'], *b['trans_err']))
+    return text
 
 
 def main():
@@ -304,6 +332,9 @@ def main():
     src_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
     ref_b_pcd = o3d.geometry.PointCloud()
     src_b_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
+    ref_c_pcd = o3d.geometry.PointCloud()
+    src_c_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
+    third = args.baseline == 'ransac_icp'
     corr_lines = o3d.geometry.LineSet()
     ghost_a = o3d.geometry.LineSet()
     ghost_b = o3d.geometry.LineSet()
@@ -339,6 +370,45 @@ def main():
             src_pcd.colors = o3d.utility.Vector3dVector(colors)
         if vis is not None:
             vis.update_geometry(src_pcd)
+
+    def paint_station(ref_geom, src_geom, ref_points, src_points, colors, case):
+        """Fill one station: its copy of the reference cloud and a transformed cloud."""
+        ref_geom.points = o3d.utility.Vector3dVector(ref_points)
+        ref_geom.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(ref_points), 1)))
+        if sparse:
+            blob = sphere_cloud(src_points, colors, marker_radius(case))
+            src_geom.vertices = blob.vertices
+            src_geom.triangles = blob.triangles
+            src_geom.vertex_colors = blob.vertex_colors
+            src_geom.vertex_normals = blob.vertex_normals
+        else:
+            src_geom.points = o3d.utility.Vector3dVector(src_points)
+            src_geom.colors = o3d.utility.Vector3dVector(colors)
+
+    def clear_station(ref_geom, src_geom):
+        ref_geom.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+        ref_geom.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+        if sparse:
+            src_geom.vertices = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            src_geom.triangles = o3d.utility.Vector3iVector(np.zeros((0, 3), dtype=np.int32))
+        else:
+            src_geom.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            src_geom.colors = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+
+    def refresh_third(vis=None):
+        case = current()
+        if state['compare'] and third and case.get('baseline'):
+            offset = station_offset(case) * 2
+            baseline = case['baseline']
+            colors = (ramp_colors(baseline['residual'], np.percentile(baseline['residual'], 98))
+                      if state['residual'] else np.tile(SRC_COLOR, (len(baseline['aligned']), 1)))
+            paint_station(ref_c_pcd, src_c_pcd, case['ref'] + offset,
+                          baseline['aligned'] + offset, colors, case)
+        else:
+            clear_station(ref_c_pcd, src_c_pcd)
+        if vis is not None:
+            vis.update_geometry(ref_c_pcd)
+            vis.update_geometry(src_c_pcd)
 
     def refresh_compare(vis=None):
         case = current()
@@ -382,9 +452,14 @@ def main():
         ghost_a.colors = shell.colors
         if state['compare']:
             offset = station_offset(case)
-            ghost_b.points = o3d.utility.Vector3dVector(np.asarray(shell.points) + offset)
-            ghost_b.lines = shell.lines
-            ghost_b.colors = shell.colors
+            stations = [offset, offset * 2] if (third and case.get('baseline')) else [offset]
+            base_points = np.asarray(shell.points)
+            base_lines = np.asarray(shell.lines)
+            points = np.vstack([base_points + step for step in stations])
+            lines = np.vstack([base_lines + i * len(base_points) for i in range(len(stations))])
+            ghost_b.points = o3d.utility.Vector3dVector(points)
+            ghost_b.lines = o3d.utility.Vector2iVector(lines)
+            ghost_b.colors = o3d.utility.Vector3dVector(np.tile(GHOST_COLOR, (len(lines), 1)))
         else:
             ghost_b.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
             ghost_b.lines = o3d.utility.Vector2iVector(np.zeros((0, 2), dtype=np.int32))
@@ -412,8 +487,16 @@ def main():
         if state['compare']:
             new.append(text_mesh([name, position + '  BEFORE FIT'],
                                  height, TEXT_COLOR, top))
-            new.append(text_mesh(['AFTER FIT'] + error_lines, height, TEXT_COLOR,
+            new.append(text_mesh(['AFTER FIT  (GeoTransformer)'] + error_lines, height, TEXT_COLOR,
                                  top + station_offset(case)))
+            if third and case.get('baseline'):
+                b = case['baseline']
+                new.append(text_mesh(
+                    ['RANSAC + ICP',
+                     'RRE {:.2f} deg   RTE {:.3f} mm'.format(b['rre'], b['rte']),
+                     'rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg'.format(*b['rot_err']),
+                     'tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'.format(*b['trans_err'])],
+                    height, TEXT_COLOR, top + station_offset(case) * 2))
         else:
             new.append(text_mesh([name] + error_lines, height, TEXT_COLOR, top))
 
@@ -442,6 +525,7 @@ def main():
         ref_pcd.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(case['ref']), 1)))
         refresh_source(vis)
         refresh_compare(vis)
+        refresh_third(vis)
         refresh_ghost(vis)
         refresh_labels(vis)
         refresh_correspondences(vis)
@@ -465,6 +549,10 @@ def main():
     if state['compare']:
         vis.add_geometry(ref_b_pcd)
         vis.add_geometry(src_b_pcd)
+        if third:
+            refresh_third()
+            vis.add_geometry(ref_c_pcd)
+            vis.add_geometry(src_c_pcd)
     if args.ghost == 'on':
         refresh_ghost()
         vis.add_geometry(ghost_a)
@@ -500,6 +588,7 @@ def main():
             state['blend'] = 1.0
         refresh_source(vis)
         refresh_compare(vis)
+        refresh_third(vis)
         print('  residual colouring {} (0 .. {:.3f} mm at the 98th percentile)'.format(
             'on' if state['residual'] else 'off', np.percentile(current()['residual'], 98)))
         return True
@@ -539,15 +628,22 @@ def main():
             state['blend'], state['playing'] = 0.0, False
             vis.add_geometry(ref_b_pcd, reset_bounding_box=False)
             vis.add_geometry(src_b_pcd, reset_bounding_box=False)
+            if third:
+                vis.add_geometry(ref_c_pcd, reset_bounding_box=False)
+                vis.add_geometry(src_c_pcd, reset_bounding_box=False)
             if args.ghost == 'on':
                 vis.add_geometry(ghost_b, reset_bounding_box=False)
         else:
             vis.remove_geometry(ref_b_pcd, reset_bounding_box=False)
             vis.remove_geometry(src_b_pcd, reset_bounding_box=False)
+            if third:
+                vis.remove_geometry(ref_c_pcd, reset_bounding_box=False)
+                vis.remove_geometry(src_c_pcd, reset_bounding_box=False)
             if args.ghost == 'on':
                 vis.remove_geometry(ghost_b, reset_bounding_box=False)
         refresh_source(vis)
         refresh_compare(vis)
+        refresh_third(vis)
         refresh_ghost(vis)
         refresh_labels(vis)
         vis.reset_view_point(True)

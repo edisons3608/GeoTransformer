@@ -34,7 +34,7 @@ sys.path.insert(0, osp.join(REPO_DIR, 'tools'))
 
 from selfpair_eval import (  # noqa: E402
     EXPERIMENTS, DEFAULT_WEIGHTS, random_transform, inverse_transform, apply_transform,
-    jitter, registration_error, sixdof_error,
+    jitter, registration_error, sixdof_error, ransac_icp,
 )
 
 DEFAULT_MODEL = r'C:\Users\esun3\OneDrive - Stryker\Documents\tal_left_reg_6_loc.h5'
@@ -74,6 +74,8 @@ def make_parser():
     parser.add_argument('--train_seed', type=int, default=101)
     parser.add_argument('--test_seed', type=int, default=909)
     parser.add_argument('--max_steps', type=int, default=None)
+    parser.add_argument('--baseline', default='ransac_icp', choices=['ransac_icp', 'off'],
+                        help='also score RANSAC over the same correspondences, then ICP')
     parser.add_argument('--resume', nargs='?', const='auto', default=None,
                         help="continue a run: 'auto' takes last.pth.tar from the run's own directory")
     return parser
@@ -244,7 +246,7 @@ def main():
 
     def evaluate(seeds, label):
         model.eval()
-        records = []
+        records, baseline_records = [], []
         for seed in seeds:
             data_dict, radius = shapes.pair(seed, args)
             with torch.no_grad():
@@ -267,22 +269,58 @@ def main():
                             'rot_err_deg': [float(x) for x in rot],
                             'trans_err_mm': [float(x * radius) for x in trans],
                             'inlier_ratio': ir, 'num_corr': int(output['corr_scores'].shape[0])})
-        rre = np.array([r['rre_deg'] for r in records])
-        rte = np.array([r['rte_mm'] for r in records])
-        summary = {'tag': tag, 'recall_5deg_2mm': float(np.mean((rre < 5) & (rte < 2))),
-                   'recall_10deg_5mm': float(np.mean((rre < 10) & (rte < 5))),
-                   'rre_p50': float(np.median(rre)),
-                   'mean_inlier_ratio': float(np.mean([r['inlier_ratio'] for r in records]))}
-        print(percentile_table(records, label))
-        print('\nrecall <5deg/2mm {:.0f}%   <10deg/5mm {:.0f}%   mean inlier ratio {:.3f}'.format(
-            100 * summary['recall_5deg_2mm'], 100 * summary['recall_10deg_5mm'], summary['mean_inlier_ratio']),
-            flush=True)
+
+            if args.baseline == 'ransac_icp':
+                # same correspondences, classical estimator
+                shape_vertices, _ = shapes.shape(seed)
+                shape_mesh = trimesh.Trimesh(shape_vertices, shapes.faces, process=False)
+                shape_center, shape_radius = shapes.frame(shape_mesh, seed)
+                surface = ((shape_vertices - shape_center) / shape_radius, shapes.faces)
+                fit, _ = ransac_icp(np.asarray(data_dict['ref_points'], dtype=np.float64),
+                                    np.asarray(data_dict['src_points'], dtype=np.float64),
+                                    ref_corr, np.asarray(output['src_corr_points'], dtype=np.float64),
+                                    mesh=surface)
+                b_rre, b_rte = registration_error(gt, fit)
+                b_rot, b_trans = sixdof_error(gt, fit)
+                b_rmse = np.linalg.norm(apply_transform(src_points, fit)
+                                        - apply_transform(src_points, gt), axis=1).mean()
+                baseline_records.append({'seed': int(seed), 'file': 'seed_{}'.format(seed), 'trial': 0,
+                                         'rmse_mm': float(b_rmse * radius),
+                                         'rre_deg': float(b_rre), 'rte_mm': float(b_rte * radius),
+                                         'rot_err_deg': [float(x) for x in b_rot],
+                                         'trans_err_mm': [float(x * radius) for x in b_trans],
+                                         'inlier_ratio': ir,
+                                         'num_corr': int(output['corr_scores'].shape[0])})
+        def summarise(rows, name):
+            rre = np.array([r['rre_deg'] for r in rows])
+            rte = np.array([r['rte_mm'] for r in rows])
+            info = {'tag': name, 'recall_5deg_2mm': float(np.mean((rre < 5) & (rte < 2))),
+                    'recall_10deg_5mm': float(np.mean((rre < 10) & (rte < 5))),
+                    'rre_p50': float(np.median(rre)),
+                    'mean_inlier_ratio': float(np.mean([r['inlier_ratio'] for r in rows]))}
+            print(percentile_table(rows, name))
+            print('\nrecall <5deg/2mm {:.0f}%   <10deg/5mm {:.0f}%   mean inlier ratio {:.3f}'.format(
+                100 * info['recall_5deg_2mm'], 100 * info['recall_10deg_5mm'], info['mean_inlier_ratio']),
+                flush=True)
+            return info
+
+        summary = summarise(records, label + '  [GeoTransformer LGR]')
+        summary['tag'] = tag
+        if baseline_records:
+            summary['baseline'] = summarise(baseline_records, label + '  [RANSAC + ICP]')
+            summary['baseline_records'] = baseline_records
         return records, summary
 
     if args.eval:
         records, summary = evaluate(test_seeds, 'test shapes: ' + tag)
         with open(osp.join(out_dir, 'test_results.json'), 'w') as f:
             json.dump({'summary': summary, 'weights': args.weights, 'records': records}, f, indent=2)
+        if 'baseline_records' in summary:
+            # its own file, so plotting tools treat it as a second run
+            baseline_summary = dict(summary['baseline'], tag=tag + ' (RANSAC+ICP)')
+            with open(osp.join(out_dir, 'test_results_ransac_icp.json'), 'w') as f:
+                json.dump({'summary': baseline_summary, 'weights': args.weights,
+                           'records': summary['baseline_records']}, f, indent=2)
         return
 
     loss_fn = loss_module.OverallLoss(cfg).cuda()

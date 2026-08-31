@@ -178,6 +178,102 @@ def build_pair(mesh, args, rng, center, radius, src_mesh=None):
     }
 
 
+def point_to_surface_icp(mesh_vertices, mesh_faces, points, init_transform,
+                         max_distance=0.05, max_iterations=60, tolerance=1e-7):
+    r"""ICP that minimises distance to the triangle surface, not to sampled points.
+
+    Each iteration finds the closest point on the mesh for every source point and
+    linearises the point-to-plane objective with that triangle's own normal, so
+    the target is the surface itself -- no normal estimation, no dependence on how
+    densely the reference happens to be sampled.
+    """
+    import open3d as o3d
+
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(np.asarray(mesh_vertices, dtype=np.float64)),
+                                     o3d.utility.Vector3iVector(np.asarray(mesh_faces, dtype=np.int32)))
+    mesh.compute_triangle_normals()
+    face_normals = np.asarray(mesh.triangle_normals)
+
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+
+    transform = np.asarray(init_transform, dtype=np.float64).copy()
+    points = np.asarray(points, dtype=np.float64)
+    previous = None
+    for _ in range(max_iterations):
+        moved = points @ transform[:3, :3].T + transform[:3, 3]
+        answer = scene.compute_closest_points(o3d.core.Tensor(moved.astype(np.float32)))
+        targets = answer['points'].numpy().astype(np.float64)
+        normals = face_normals[answer['primitive_ids'].numpy()]
+
+        residual = moved - targets
+        distance = np.linalg.norm(residual, axis=1)
+        keep = distance < max_distance
+        if keep.sum() < 6:
+            break
+
+        p, q, n = moved[keep], targets[keep], normals[keep]
+        # linearised point-to-plane: unknowns are a small rotation and a translation
+        A = np.hstack([np.cross(p, n), n])
+        b = -np.einsum('ij,ij->i', p - q, n)
+        solution, *_ = np.linalg.lstsq(A, b, rcond=None)
+        alpha, beta, gamma = solution[:3]
+        step = np.eye(4)
+        step[:3, :3] = np.array([[1.0, -gamma, beta], [gamma, 1.0, -alpha], [-beta, alpha, 1.0]])
+        u, _, vt = np.linalg.svd(step[:3, :3])          # re-orthonormalise the small rotation
+        step[:3, :3] = u @ vt
+        step[:3, 3] = solution[3:]
+        transform = step @ transform
+
+        error = float(np.mean(np.einsum('ij,ij->i', p - q, n) ** 2))
+        if previous is not None and abs(previous - error) < tolerance:
+            break
+        previous = error
+    return transform
+
+
+def ransac_icp(ref_points, src_points, ref_corr, src_corr, ransac_distance=0.1,
+               icp_distance=0.05, mesh=None):
+    r"""Classical baseline: RANSAC over the predicted correspondences, then ICP.
+
+    RANSAC re-estimates the pose from the same correspondences GeoTransformer
+    produced (so it is the estimator being compared, not the matcher). ICP then
+    refines it: point-to-surface against `mesh` when one is given, otherwise
+    point-to-plane against the reference cloud. Returns (refined, ransac_only).
+
+    Open3D's correspondence RANSAC takes no seed, so this stage is stochastic:
+    repeat runs differ by a few tenths of a degree.
+    """
+    import open3d as o3d
+
+    if len(ref_corr) < 3:
+        return np.eye(4), np.eye(4)
+
+    src_corr_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(src_corr, dtype=np.float64)))
+    ref_corr_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(ref_corr, dtype=np.float64)))
+    matches = o3d.utility.Vector2iVector(np.tile(np.arange(len(ref_corr))[:, None], (1, 2)))
+    result = o3d.pipelines.registration.registration_ransac_based_on_correspondence(
+        src_corr_pcd, ref_corr_pcd, matches, ransac_distance,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint(False), 3,
+        [o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(ransac_distance)],
+        o3d.pipelines.registration.RANSACConvergenceCriteria(50000, 0.999))
+    ransac_transform = np.asarray(result.transformation)
+
+    if mesh is not None:
+        refined = point_to_surface_icp(mesh[0], mesh[1], src_points, ransac_transform,
+                                       max_distance=icp_distance)
+        return refined, ransac_transform
+
+    source = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(src_points, dtype=np.float64)))
+    target = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(ref_points, dtype=np.float64)))
+    target.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=icp_distance * 4, max_nn=30))
+    icp = o3d.pipelines.registration.registration_icp(
+        source, target, icp_distance, ransac_transform,
+        o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=60))
+    return np.asarray(icp.transformation), ransac_transform
+
+
 def registration_error(gt_transform, est_transform):
     gt_r, est_r = gt_transform[:3, :3], est_transform[:3, :3]
     cos = (np.trace(est_r.T @ gt_r) - 1.0) / 2.0
