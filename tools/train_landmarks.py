@@ -48,6 +48,9 @@ def make_parser():
     parser.add_argument('--init', default='pretrained', choices=['pretrained', 'scratch'])
     parser.add_argument('--weights', default=None, help='checkpoint for --eval')
     parser.add_argument('--eval', action='store_true', help='score a checkpoint on the test shapes')
+    parser.add_argument('--reference', default='full', choices=['full', 'regions'],
+                        help='full: reference is the whole dense shape; '
+                             'regions: reference is only the vertices inside the six regions')
     parser.add_argument('--points_per_region', type=int, default=4)
     parser.add_argument('--points_in_patch', type=int, default=0,
                         help='points grouped per superpoint; 0 = auto from the source cloud size '
@@ -111,6 +114,16 @@ class LandmarkShapes:
             self.region_faces.append(self.faces[mask[self.faces].all(axis=1)])
         if any(len(f) == 0 for f in self.region_faces):
             raise RuntimeError('a landmark region resolved to zero faces')
+        self.region_vertices = np.unique(np.concatenate([f.reshape(-1) for f in self.region_faces]))
+        self._frames = {}
+
+    def frame(self, mesh, seed):
+        r"""Centroid and radius of the whole shape -- the frame every variant shares."""
+        if seed not in self._frames:
+            probe, _ = trimesh.sample.sample_surface(mesh, 100000, seed=int(seed))
+            center = np.asarray(probe).mean(axis=0)
+            self._frames[seed] = (center, np.linalg.norm(np.asarray(probe) - center, axis=1).max())
+        return self._frames[seed]
 
     def shape(self, seed):
         r"""One SSM draw: gaussian z-scores truncated to +-sigma_range, in millimetres."""
@@ -130,12 +143,15 @@ class LandmarkShapes:
         rng = np.random.default_rng(seed + 7_000_000)
         mesh = trimesh.Trimesh(vertices, self.faces, process=False)
 
-        probe, _ = trimesh.sample.sample_surface(mesh, 100000, seed=int(seed))
-        center = np.asarray(probe).mean(axis=0)
-        radius = np.linalg.norm(np.asarray(probe) - center, axis=1).max()
+        center, radius = self.frame(mesh, seed)
 
-        ref_points, _ = trimesh.sample.sample_surface(mesh, args.num_points, seed=int(rng.integers(1 << 31)))
-        ref_points = (np.asarray(ref_points) - center) / radius
+        # drawn either way so the transformed cloud and the ground-truth transform
+        # are identical between the two reference variants
+        sampled, _ = trimesh.sample.sample_surface(mesh, args.num_points, seed=int(rng.integers(1 << 31)))
+        if getattr(args, 'reference', 'full') == 'regions':
+            ref_points = (vertices[self.region_vertices] - center) / radius
+        else:
+            ref_points = (np.asarray(sampled) - center) / radius
 
         picked = []
         for faces in self.region_faces:
@@ -178,7 +194,8 @@ def percentile_table(records, title):
 
 def main():
     args = make_parser().parse_args()
-    tag = args.tag or ('landmarks_{}pts_{}'.format(6 * args.points_per_region, args.init))
+    tag = args.tag or ('landmarks_{}pts_{}ref_{}'.format(
+        6 * args.points_per_region, args.reference, args.init))
     out_dir = osp.join(args.out_dir, tag)
     os.makedirs(out_dir, exist_ok=True)
     torch.manual_seed(args.train_seed)
