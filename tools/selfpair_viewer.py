@@ -39,6 +39,7 @@ from selfpair_eval import (  # noqa: E402
 REF_COLOR = np.array([0.165, 0.471, 0.839])   # blue
 SRC_COLOR = np.array([0.922, 0.408, 0.204])   # orange
 CORR_COLOR = np.array([0.42, 0.45, 0.49])
+GHOST_COLOR = np.array([0.72, 0.75, 0.78])
 RESIDUAL_RAMP = np.array([[0.804, 0.886, 0.984], [0.431, 0.655, 0.925],
                           [0.165, 0.471, 0.839], [0.063, 0.259, 0.506]])
 
@@ -77,6 +78,11 @@ def make_parser():
                              'landmarks: a few points sampled from each landmark region')
     parser.add_argument('--model_file', default=None, help='SSM h5 with landmark regions (--pair_source landmarks)')
     parser.add_argument('--points_per_region', type=int, default=4)
+    parser.add_argument('--ghost', default='on', choices=['on', 'off'],
+                        help='draw the whole talus as a faint wireframe shell behind the clouds')
+    parser.add_argument('--ghost_faces', type=int, default=1200, help='decimation target for that shell')
+    parser.add_argument('--reference', default='full', choices=['full', 'regions'],
+                        help='landmarks mode: reference is the whole shape, or only the region vertices')
     parser.add_argument('--points_in_patch', type=int, default=0, help='0 = auto, as in training')
     parser.add_argument('--test_seed', type=int, default=909, help='first shape seed for landmark cases')
     parser.add_argument('--num_cases', type=int, default=10)
@@ -126,6 +132,22 @@ def sphere_cloud(points, colors, radius):
     mesh.vertex_colors = o3d.utility.Vector3dVector(np.vstack(vertex_colors))
     mesh.compute_vertex_normals()
     return mesh
+
+
+def ghost_wireframe(vertices, faces, target_faces, color):
+    r"""Faint wireframe shell of the whole bone.
+
+    The legacy renderer has no alpha, so a decimated wireframe stands in for a
+    translucent surface: it gives the anatomy for context without hiding the
+    points in front of or inside it.
+    """
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(vertices),
+                                     o3d.utility.Vector3iVector(faces))
+    if target_faces and len(faces) > target_faces:
+        mesh = mesh.simplify_quadric_decimation(int(target_faces))
+    lines = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
+    lines.paint_uniform_color(color)
+    return lines
 
 
 def ramp_colors(values, vmax):
@@ -180,6 +202,7 @@ class Session:
         self.pair_args.rotation_magnitude = args.rotation_magnitude
         self.pair_args.seed = args.seed
         self.pair_args.noise_sides = args.noise_sides
+        self.pair_args.reference = args.reference
 
         self.model = create_model(self.cfg).cuda()
         self.model.load_state_dict(torch.load(args.weights, map_location='cpu', weights_only=False)['model'])
@@ -203,12 +226,17 @@ class Session:
         if self.landmarks is not None:
             data_dict, radius = self.landmarks.pair(mesh_id, self.pair_args)
             name = 'seed {}'.format(mesh_id)
+            shape_vertices, _ = self.landmarks.shape(mesh_id)
+            shape_mesh = trimesh.Trimesh(shape_vertices, self.landmarks.faces, process=False)
+            shape_center, shape_radius = self.landmarks.frame(shape_mesh, mesh_id)
+            ghost = ((shape_vertices - shape_center) / shape_radius, np.asarray(self.landmarks.faces))
         else:
             mesh, src_mesh = load_pair_meshes(self.files[mesh_id], self.args.src_dir)
             center, radius = normalize_frame(mesh, seed=self.pair_args.seed + mesh_id)
             rng = np.random.default_rng([self.pair_args.seed, mesh_id, trial])
             data_dict = build_pair(mesh, self.pair_args, rng, center, radius, src_mesh)
             name = osp.splitext(osp.basename(self.files[mesh_id]))[0]
+            ghost = ((np.asarray(mesh.vertices) - center) / radius, np.asarray(mesh.faces))
 
         if self.neighbor_limits is None:
             self.neighbor_limits = self.calibrate(
@@ -247,6 +275,7 @@ class Session:
             'rot_err': rot_err, 'trans_err': trans_err * mm,
             'corr_ref': np.asarray(output['ref_corr_points'], dtype=np.float64) * mm,
             'corr_src': apply_transform(np.asarray(output['src_corr_points'], dtype=np.float64) * mm, est_mm),
+            'ghost': (ghost[0] * mm, ghost[1]),
         }
         self.cache[index] = case
         return case
@@ -276,6 +305,8 @@ def main():
     ref_b_pcd = o3d.geometry.PointCloud()
     src_b_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
     corr_lines = o3d.geometry.LineSet()
+    ghost_a = o3d.geometry.LineSet()
+    ghost_b = o3d.geometry.LineSet()
 
     labels = []          # label meshes currently added to the window
 
@@ -340,6 +371,27 @@ def main():
             vis.update_geometry(ref_b_pcd)
             vis.update_geometry(src_b_pcd)
 
+    def refresh_ghost(vis=None):
+        if args.ghost != 'on':
+            return
+        case = current()
+        vertices, faces = case['ghost']
+        shell = ghost_wireframe(vertices, faces, args.ghost_faces, GHOST_COLOR)
+        ghost_a.points = shell.points
+        ghost_a.lines = shell.lines
+        ghost_a.colors = shell.colors
+        if state['compare']:
+            offset = station_offset(case)
+            ghost_b.points = o3d.utility.Vector3dVector(np.asarray(shell.points) + offset)
+            ghost_b.lines = shell.lines
+            ghost_b.colors = shell.colors
+        else:
+            ghost_b.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
+            ghost_b.lines = o3d.utility.Vector2iVector(np.zeros((0, 2), dtype=np.int32))
+        if vis is not None:
+            vis.update_geometry(ghost_a)
+            vis.update_geometry(ghost_b)
+
     def refresh_labels(vis=None):
         case = current()
         merged = np.vstack([case['ref'], case['src'], case['aligned']])
@@ -390,6 +442,7 @@ def main():
         ref_pcd.colors = o3d.utility.Vector3dVector(np.tile(REF_COLOR, (len(case['ref']), 1)))
         refresh_source(vis)
         refresh_compare(vis)
+        refresh_ghost(vis)
         refresh_labels(vis)
         refresh_correspondences(vis)
         if vis is not None:
@@ -412,13 +465,18 @@ def main():
     if state['compare']:
         vis.add_geometry(ref_b_pcd)
         vis.add_geometry(src_b_pcd)
+    if args.ghost == 'on':
+        refresh_ghost()
+        vis.add_geometry(ghost_a)
+        if state['compare']:
+            vis.add_geometry(ghost_b)
     refresh_labels()
     for mesh in labels:
         vis.add_geometry(mesh)
 
     opt = vis.get_render_option()
     opt.background_color = np.array([0.988, 0.988, 0.984])
-    opt.point_size = 2.5
+    opt.point_size = 7.0 if len(np.asarray(ref_pcd.points)) < 2000 else 2.5
     opt.mesh_show_back_face = True   # labels are flat meshes; never cull them
 
     def set_blend(value, vis):
@@ -481,11 +539,16 @@ def main():
             state['blend'], state['playing'] = 0.0, False
             vis.add_geometry(ref_b_pcd, reset_bounding_box=False)
             vis.add_geometry(src_b_pcd, reset_bounding_box=False)
+            if args.ghost == 'on':
+                vis.add_geometry(ghost_b, reset_bounding_box=False)
         else:
             vis.remove_geometry(ref_b_pcd, reset_bounding_box=False)
             vis.remove_geometry(src_b_pcd, reset_bounding_box=False)
+            if args.ghost == 'on':
+                vis.remove_geometry(ghost_b, reset_bounding_box=False)
         refresh_source(vis)
         refresh_compare(vis)
+        refresh_ghost(vis)
         refresh_labels(vis)
         vis.reset_view_point(True)
         print('  {}'.format('side-by-side: left = before fit, right = after fit'

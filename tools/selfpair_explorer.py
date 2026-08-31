@@ -38,12 +38,13 @@ def make_parser():
 
 def load_runs(results_dir, only=None):
     runs = []
-    for path in sorted(glob.glob(osp.join(results_dir, '*.json'))):
+    pattern = results_dir if '*' in results_dir else osp.join(results_dir, '*.json')
+    for path in sorted(glob.glob(pattern)):
         with open(path) as f:
             data = json.load(f)
         if 'summary' not in data or 'records' not in data:
             continue          # training history and other bookkeeping files live here too
-        tag = data['summary'].get('tag', osp.splitext(osp.basename(path))[0])
+        tag = data['summary'].get('tag') or osp.basename(osp.dirname(path))
         if only and tag not in only:
             continue
         if 'rot_err_deg' not in data['records'][0]:
