@@ -46,6 +46,13 @@ def make_parser():
     parser.add_argument('--out_dir', default=osp.join(REPO_DIR, 'output', 'landmark_bench'))
     parser.add_argument('--tag', default=None)
     parser.add_argument('--init', default='pretrained', choices=['pretrained', 'scratch'])
+    parser.add_argument('--init_weights', default=None,
+                        help='start from this checkpoint instead of the 3DMatch weights')
+    parser.add_argument('--center', default='on', choices=['on', 'off'],
+                        help='translate each cloud onto its own centroid before the network sees it')
+    parser.add_argument('--rotate_reference', default='on', choices=['on', 'off'],
+                        help='also give the reference bone a random orientation; off reproduces the '
+                             'older runs, where the bone always faced the shape model way')
     parser.add_argument('--weights', default=None, help='checkpoint for --eval')
     parser.add_argument('--eval', action='store_true', help='score a checkpoint on the test shapes')
     parser.add_argument('--reference', default='full', choices=['full', 'regions'],
@@ -168,6 +175,29 @@ class LandmarkShapes:
         if args.noise_sigma > 0:
             src_points = jitter(src_points, args.noise_sigma, args.noise_clip, rng)
 
+        if getattr(args, 'rotate_reference', 'on') == 'on':
+            # the reference bone gets its own random orientation, not just the source.
+            # KPConv kernel points are fixed in world coordinates, so without this the
+            # backbone only ever sees the bone facing one way and a scan in any other
+            # frame is out of distribution. Drawn after the source so a given seed keeps
+            # the same landmark points either way.
+            spin = random_transform(rng, 'so3', 180.0, 0.0)[:3, :3]
+            ref_points = ref_points @ spin.T
+            transform = transform.copy()
+            transform[:3, :3] = spin @ transform[:3, :3]
+            transform[:3, 3] = spin @ transform[:3, 3]
+
+        if getattr(args, 'center', 'on') == 'on':
+            # both clouds on their own centroid, which is how a digitized cloud arrives:
+            # nothing places it in the bone's frame before the network sees it, so the
+            # network is left with the rotation and only the residual translation
+            ref_shift = ref_points.mean(axis=0)
+            src_shift = src_points.mean(axis=0)
+            ref_points = ref_points - ref_shift
+            src_points = src_points - src_shift
+            transform = transform.copy()
+            transform[:3, 3] = transform[:3, :3] @ src_shift + transform[:3, 3] - ref_shift
+
         return {
             'ref_points': ref_points.astype(np.float32),
             'src_points': src_points.astype(np.float32),
@@ -240,6 +270,10 @@ def main():
     if args.eval:
         state = torch.load(args.weights, map_location='cpu', weights_only=False)
         model.load_state_dict(state['model'])
+    elif args.init_weights:
+        state = torch.load(args.init_weights, map_location='cpu', weights_only=False)
+        model.load_state_dict(state['model'])
+        print('initialised from ' + args.init_weights, flush=True)
     elif args.init == 'pretrained':
         state = torch.load(osp.join(REPO_DIR, DEFAULT_WEIGHTS['3dmatch']), map_location='cpu', weights_only=False)
         model.load_state_dict(state['model'])

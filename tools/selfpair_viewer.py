@@ -91,6 +91,7 @@ def make_parser():
     parser.add_argument('--baseline', default='ransac_icp', choices=['ransac_icp', 'off'],
                         help='third station: RANSAC over the same correspondences, then ICP')
     parser.add_argument('--selftest', action='store_true', help='build everything, skip opening the window')
+    parser.add_argument('--snapshot', default=None, help='render each case to PNG(s) at this path instead of opening a window')
     return parser
 
 
@@ -304,30 +305,40 @@ class Session:
 
 
 def describe(case, index, total):
-    text = ('\n[{}/{}] {}  trial {}\n'
-            '  GeoTransformer  RRE {:.2f} deg  RTE {:.3f} mm  mean residual {:.3f} mm  ({:.2f}s on GPU)\n'
-            '    6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
-            .format(index + 1, total, case['name'], case['trial'], case['rre'], case['rte'],
-                    case['residual'].mean(), case['time'], *case['rot_err'], *case['trans_err']))
+    def errors(fit):
+        # a case with no recorded pose carries NaN errors: say nothing rather than 'nan'
+        if not np.isfinite(fit['rre']):
+            return ''
+        return ('\n    RRE {:.2f} deg  RTE {:.3f} mm  mean residual {:.3f} mm\n'
+                '    6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
+                .format(fit['rre'], fit['rte'], fit['residual'].mean(), *fit['rot_err'], *fit['trans_err']))
+
+    text = '\n[{}/{}] {}  trial {}\n  GeoTransformer  ({:.2f}s on GPU)'.format(
+        index + 1, total, case['name'], case['trial'], case['time']) + errors(case)
+    for line in case.get('notes', []):
+        text += '\n    ' + line
     if case.get('baseline'):
         b = case['baseline']
-        text += ('\n  RANSAC + ICP    RRE {:.2f} deg  RTE {:.3f} mm  mean residual {:.3f} mm\n'
-                 '    6-DoF  rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg   tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'
-                 .format(b['rre'], b['rte'], b['residual'].mean(), *b['rot_err'], *b['trans_err']))
+        text += '\n  RANSAC + ICP' + errors(b)
+        for line in b.get('notes', []):
+            text += '\n    ' + line
     return text
 
 
-def main():
-    args = make_parser().parse_args()
-    session = Session(args)
+def run_viewer(session, args, sparse):
+    r"""Open the window on `session` (or, with `args.selftest`, just build every case).
 
+    `session` needs `case_specs` and `case(index)`; each case is the dict `Session.case`
+    builds. A case may carry `notes` (extra label lines under the GeoTransformer
+    numbers) and its baseline may carry `notes` too. `args.snapshot`, when set, renders
+    every case to PNG(s) at that path and returns without opening a window.
+    """
     state = {'index': 0, 'blend': 0.0 if args.mode == 'compare' else 1.0, 'playing': False,
              'direction': 1.0, 'residual': False, 'corr': False, 'last': time.time(),
              'compare': args.mode == 'compare'}
 
     # station A (left) is the live one; station B (right) holds the fitted result
     # so before and after can be read at once under a single orbit
-    sparse = args.pair_source == 'landmarks'
     ref_pcd = o3d.geometry.PointCloud()
     src_pcd = o3d.geometry.TriangleMesh() if sparse else o3d.geometry.PointCloud()
     ref_b_pcd = o3d.geometry.PointCloud()
@@ -474,12 +485,14 @@ def main():
         height = 0.045 * width
         top = np.array([case['ref'][:, 0].min(), merged[:, 1].max() + 0.26 * width,
                         case['ref'][:, 2].mean()])
-        rot, trans = case['rot_err'], case['trans_err']
-        error_lines = [
-            'RRE {:.2f} deg   RTE {:.3f} mm'.format(case['rre'], case['rte']),
-            'rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg'.format(*rot),
-            'tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'.format(*trans),
-        ]
+        def error_lines_for(fit):
+            if not np.isfinite(fit['rre']):
+                return list(fit.get('notes', []))
+            return ['RRE {:.2f} deg   RTE {:.3f} mm'.format(fit['rre'], fit['rte']),
+                    'rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg'.format(*fit['rot_err']),
+                    'tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'.format(*fit['trans_err'])] + list(fit.get('notes', []))
+
+        error_lines = error_lines_for(case)
         name = '{}  trial {}'.format(case['name'], case['trial'])
         position = '[{}/{}]'.format(state['index'] + 1, len(session.case_specs))
 
@@ -491,12 +504,8 @@ def main():
                                  top + station_offset(case)))
             if third and case.get('baseline'):
                 b = case['baseline']
-                new.append(text_mesh(
-                    ['RANSAC + ICP',
-                     'RRE {:.2f} deg   RTE {:.3f} mm'.format(b['rre'], b['rte']),
-                     'rx {:+.2f}  ry {:+.2f}  rz {:+.2f} deg'.format(*b['rot_err']),
-                     'tx {:+.3f}  ty {:+.3f}  tz {:+.3f} mm'.format(*b['trans_err'])],
-                    height, TEXT_COLOR, top + station_offset(case) * 2))
+                new.append(text_mesh(['RANSAC + ICP'] + error_lines_for(b),
+                                     height, TEXT_COLOR, top + station_offset(case) * 2))
         else:
             new.append(text_mesh([name] + error_lines, height, TEXT_COLOR, top))
 
@@ -542,8 +551,10 @@ def main():
             len(session.case_specs), len(np.asarray(ref_pcd.points))))
         return
 
+    snapshot = getattr(args, 'snapshot', None)
     vis = o3d.visualization.VisualizerWithKeyCallback()
-    vis.create_window(window_name='GeoTransformer self-pair viewer', width=1440, height=900)
+    vis.create_window(window_name='GeoTransformer self-pair viewer', width=1440, height=900,
+                      visible=not snapshot)
     vis.add_geometry(ref_pcd)
     vis.add_geometry(src_pcd)
     if state['compare']:
@@ -566,6 +577,23 @@ def main():
     opt.background_color = np.array([0.988, 0.988, 0.984])
     opt.point_size = 7.0 if len(np.asarray(ref_pcd.points)) < 2000 else 2.5
     opt.mesh_show_back_face = True   # labels are flat meshes; never cull them
+
+    if snapshot:
+        # offscreen frames of the opening view, one per case, for reports and quick checks
+        stem, ext = osp.splitext(snapshot)
+        for i in range(len(session.case_specs)):
+            state['index'] = i
+            load_case(vis)
+            vis.reset_view_point(True)
+            vis.poll_events()
+            vis.update_renderer()
+            case = current()
+            path = snapshot if len(session.case_specs) == 1 else '{}_{}_t{}{}'.format(
+                stem, case['name'], case['trial'], ext or '.png')
+            vis.capture_screen_image(path, do_render=True)
+            print('wrote ' + path)
+        vis.destroy_window()
+        return
 
     def set_blend(value, vis):
         state['blend'] = float(np.clip(value, 0.0, 1.0))
@@ -658,6 +686,11 @@ def main():
     print(HELP)
     vis.run()
     vis.destroy_window()
+
+
+def main():
+    args = make_parser().parse_args()
+    run_viewer(Session(args), args, sparse=args.pair_source == 'landmarks')
 
 
 if __name__ == '__main__':
